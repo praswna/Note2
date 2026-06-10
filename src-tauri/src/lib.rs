@@ -2,12 +2,27 @@ use std::fs;
 use tauri::Manager;
 
 #[tauri::command]
-fn save_image(app: tauri::AppHandle, id: String, data: Vec<u8>, ext: String) -> Result<String, String> {
-    let dir = app
+fn save_image(
+    app: tauri::AppHandle,
+    id: String,
+    data: Vec<u8>,
+    ext: String,
+    subdir: Vec<String>,
+) -> Result<String, String> {
+    // Validate each path component to prevent directory traversal
+    for part in &subdir {
+        if part.is_empty() || part.contains("..") || part.starts_with('/') || part.starts_with('\\') {
+            return Err(format!("Invalid directory component: {}", part));
+        }
+    }
+
+    let base = app
         .path()
         .app_local_data_dir()
         .map_err(|e| e.to_string())?
         .join("images");
+
+    let dir = subdir.iter().fold(base, |acc, part| acc.join(part));
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{}.{}", id, ext));
     fs::write(&path, &data).map_err(|e| e.to_string())?;

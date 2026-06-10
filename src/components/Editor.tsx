@@ -25,12 +25,12 @@ export default function Editor() {
   const editorRef = useRef<HTMLDivElement>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedId = useRef<string | null>(null);
-  // Ref so saveContent always uses the current note id, not a stale closure value
   const currentNoteIdRef = useRef<string | null>(null);
+  // Tracks the notebook tree path (root → leaf names) for the current note
+  const notebookPathRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!note) return;
-    // Cancel any pending save from the previous note before overwriting innerHTML
     if (saveTimeout.current) {
       clearTimeout(saveTimeout.current);
       saveTimeout.current = null;
@@ -42,6 +42,19 @@ export default function Editor() {
       lastSavedId.current = note.id;
     }
   }, [note?.id]);
+
+  // Keep notebookPathRef in sync whenever the note's notebook changes
+  useEffect(() => {
+    if (!note) return;
+    const path: string[] = [];
+    let current = state.notebooks.find(nb => nb.id === note.notebookId);
+    while (current) {
+      path.unshift(current.name);
+      const parentId = current.parentId;
+      current = parentId ? state.notebooks.find(nb => nb.id === parentId) : undefined;
+    }
+    notebookPathRef.current = path;
+  }, [note?.notebookId, state.notebooks]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -110,7 +123,7 @@ export default function Editor() {
 
   const insertImageDataUrl = useCallback(async (dataUrl: string) => {
     editorRef.current?.focus();
-    const src = await saveImageFile(dataUrl);
+    const src = await saveImageFile(dataUrl, notebookPathRef.current);
     document.execCommand('insertHTML', false, `<img src="${src}" class="note-image" />`);
     handleEditorInput();
   }, [handleEditorInput]);
