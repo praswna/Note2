@@ -8,7 +8,6 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { saveImageFile } from '../utils/imageStorage';
-import { NoteVersion } from '../types';
 
 type FormatCommand = 'bold' | 'italic' | 'underline' | 'strikethrough' | 'insertUnorderedList' | 'insertOrderedList' | 'justifyLeft' | 'justifyCenter' | 'justifyRight';
 
@@ -23,22 +22,16 @@ export default function Editor() {
   const [fontSize, setFontSize] = useState('16');
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [selectedVersion, setSelectedVersion] = useState<NoteVersion | null>(null);
 
   const editorRef = useRef<HTMLDivElement>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedId = useRef<string | null>(null);
   const currentNoteIdRef = useRef<string | null>(null);
-  const prevNoteIdRef = useRef<string | null>(null);
   // Tracks the notebook tree path (root → leaf names) for the current note
   const notebookPathRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!note) return;
-    if (prevNoteIdRef.current && prevNoteIdRef.current !== note.id) {
-      dispatch({ type: 'SAVE_VERSION', noteId: prevNoteIdRef.current });
-    }
-    prevNoteIdRef.current = note.id;
     if (saveTimeout.current) {
       clearTimeout(saveTimeout.current);
       saveTimeout.current = null;
@@ -50,7 +43,6 @@ export default function Editor() {
       lastSavedId.current = note.id;
     }
     setHistoryOpen(false);
-    setSelectedVersion(null);
   }, [note?.id]);
 
   // Keep notebookPathRef in sync whenever the note's notebook changes
@@ -85,6 +77,19 @@ export default function Editor() {
       note: { id: currentNoteIdRef.current, content },
     });
   }, [dispatch]);
+
+  // Ctrl+S → save version
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 's' && (e.ctrlKey || e.metaKey) && currentNoteIdRef.current) {
+        e.preventDefault();
+        saveContent();
+        dispatch({ type: 'SAVE_VERSION', noteId: currentNoteIdRef.current });
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [dispatch, saveContent]);
 
   const handleTitleChange = (value: string) => {
     setTitle(value);
@@ -402,7 +407,7 @@ export default function Editor() {
               <div className="history-header">
                 <button
                   className="action-btn"
-                  onClick={() => { setHistoryOpen(false); setSelectedVersion(null); }}
+                  onClick={() => setHistoryOpen(false)}
                   title="닫기"
                 >
                   <X size={16} />
@@ -411,53 +416,26 @@ export default function Editor() {
                 <span style={{ flex: 1, fontWeight: 600, fontSize: 14, paddingLeft: 8 }}>
                   버전 기록 ({noteVersions.length}개)
                 </span>
-                <button
-                  className="action-btn"
-                  disabled={!selectedVersion}
-                  style={{ opacity: selectedVersion ? 1 : 0.4, fontSize: 13, width: 'auto', padding: '0 12px' }}
-                  onClick={() => {
-                    if (!selectedVersion) return;
-                    dispatch({ type: 'RESTORE_VERSION', versionId: selectedVersion.id });
-                    setHistoryOpen(false);
-                    setSelectedVersion(null);
-                  }}
-                  title="선택한 버전으로 복원"
-                >
-                  복원
-                </button>
               </div>
-              <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                <div className="history-list">
-                  {noteVersions.length === 0 ? (
-                    <div className="history-empty">저장된 버전이 없습니다</div>
-                  ) : (
-                    noteVersions.map(v => (
-                      <div
-                        key={v.id}
-                        className={`history-item ${selectedVersion?.id === v.id ? 'active' : ''}`}
-                        onClick={() => setSelectedVersion(v)}
+              <div className="history-list">
+                {noteVersions.length === 0 ? (
+                  <div className="history-empty">저장된 버전이 없습니다<br/><small>Ctrl+S로 버전을 저장하세요</small></div>
+                ) : (
+                  noteVersions.map(v => (
+                    <div key={v.id} className="history-item">
+                      <span className="history-item-date">{formatVersionDate(v.savedAt)}</span>
+                      <button
+                        className="history-restore-btn"
+                        onClick={() => {
+                          dispatch({ type: 'RESTORE_VERSION', versionId: v.id });
+                          setHistoryOpen(false);
+                        }}
                       >
-                        {formatVersionDate(v.savedAt)}
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="history-preview">
-                  {selectedVersion ? (
-                    <>
-                      <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 12 }}>
-                        {selectedVersion.title}
-                      </div>
-                      <div
-                        className="note-body readonly"
-                        dangerouslySetInnerHTML={{ __html: selectedVersion.content }}
-                        style={{ overflow: 'auto', flex: 1 }}
-                      />
-                    </>
-                  ) : (
-                    <div className="history-empty">버전을 선택하면 미리 볼 수 있습니다</div>
-                  )}
-                </div>
+                        복원
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           );
