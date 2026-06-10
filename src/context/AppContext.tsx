@@ -6,6 +6,7 @@ import {
   loadTags, saveTags,
   generateId,
 } from '../utils/storage';
+import { migrateBase64Images } from '../utils/migrateImages';
 
 export type Action =
   | { type: 'SET_VIEW'; viewMode: ViewMode; notebookId?: string; tagId?: string }
@@ -208,6 +209,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const firstActive = state.notes.find(n => !n.isTrashed);
       if (firstActive) dispatch({ type: 'SELECT_NOTE', noteId: firstActive.id });
     }
+    // Migrate any existing base64 images to files (Tauri only, no-op otherwise)
+    migrateBase64Images(
+      state.notes,
+      state.notebooks,
+      (noteId, content) => dispatch({ type: 'UPDATE_NOTE', note: { id: noteId, content } }),
+    );
   }, []);
 
   return <AppContext.Provider value={{ state, dispatch }}>{children}</AppContext.Provider>;
