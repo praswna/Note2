@@ -7,6 +7,7 @@ import {
   Highlighter,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { saveImageFile } from '../utils/imageStorage';
 
 type FormatCommand = 'bold' | 'italic' | 'underline' | 'strikethrough' | 'insertUnorderedList' | 'insertOrderedList' | 'justifyLeft' | 'justifyCenter' | 'justifyRight';
 
@@ -107,14 +108,12 @@ export default function Editor() {
     handleEditorInput();
   }
 
-  function insertImageDataUrl(dataUrl: string) {
+  const insertImageDataUrl = useCallback(async (dataUrl: string) => {
     editorRef.current?.focus();
-    document.execCommand(
-      'insertHTML', false,
-      `<img src="${dataUrl}" class="note-image" />`
-    );
+    const src = await saveImageFile(dataUrl);
+    document.execCommand('insertHTML', false, `<img src="${src}" class="note-image" />`);
     handleEditorInput();
-  }
+  }, [handleEditorInput]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
     const imageItem = Array.from(e.clipboardData.items).find(item => item.type.startsWith('image/'));
@@ -123,9 +122,9 @@ export default function Editor() {
     const file = imageItem.getAsFile();
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => insertImageDataUrl(reader.result as string);
+    reader.onload = () => insertImageDataUrl(reader.result as string).catch(console.error);
     reader.readAsDataURL(file);
-  }, [handleEditorInput]);
+  }, [insertImageDataUrl]);
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (Array.from(e.dataTransfer.types).includes('Files')) {
@@ -145,7 +144,6 @@ export default function Editor() {
     setIsDraggingOver(false);
     const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
     if (files.length === 0) return;
-    // Position caret at drop point
     const range = document.caretRangeFromPoint?.(e.clientX, e.clientY);
     if (range) {
       const sel = window.getSelection();
@@ -154,10 +152,10 @@ export default function Editor() {
     }
     files.forEach(file => {
       const reader = new FileReader();
-      reader.onload = () => insertImageDataUrl(reader.result as string);
+      reader.onload = () => insertImageDataUrl(reader.result as string).catch(console.error);
       reader.readAsDataURL(file);
     });
-  }, [handleEditorInput]);
+  }, [insertImageDataUrl]);
 
   if (!note) {
     return (
