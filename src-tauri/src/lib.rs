@@ -1,6 +1,6 @@
 use std::fs;
 
-const ALLOWED_DATA_FILES: &[&str] = &["notes.json", "notebooks.json", "tags.json"];
+const ALLOWED_DATA_FILES: &[&str] = &["notes.json", "notebooks.json", "tags.json", "versions.json"];
 
 fn exe_dir() -> Result<std::path::PathBuf, String> {
     std::env::current_exe()

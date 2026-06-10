@@ -1,16 +1,17 @@
 import { createContext, useContext, useReducer, useEffect, useState, ReactNode } from 'react';
-import { AppState, Note, Notebook, Tag, ViewMode } from '../types';
+import { AppState, Note, Notebook, Tag, NoteVersion, ViewMode } from '../types';
 import {
   loadNotes, saveNotes,
   loadNotebooks, saveNotebooks,
   loadTags, saveTags,
+  loadVersions, saveVersions,
   loadDataFromFiles,
   generateId,
 } from '../utils/storage';
 import { isTauriApp } from '../utils/tauri';
 
 export type Action =
-  | { type: 'LOAD_DATA'; notes: Note[]; notebooks: Notebook[]; tags: Tag[] }
+  | { type: 'LOAD_DATA'; notes: Note[]; notebooks: Notebook[]; tags: Tag[]; versions: NoteVersion[] }
   | { type: 'SET_VIEW'; viewMode: ViewMode; notebookId?: string; tagId?: string }
   | { type: 'SELECT_NOTE'; noteId: string | null }
   | { type: 'SET_SEARCH'; query: string }
@@ -27,7 +28,10 @@ export type Action =
   | { type: 'MOVE_NOTEBOOK'; notebookId: string; parentId: string | undefined }
   | { type: 'CREATE_TAG'; name: string; color: string }
   | { type: 'DELETE_TAG'; tagId: string }
-  | { type: 'TOGGLE_SIDEBAR' };
+  | { type: 'TOGGLE_SIDEBAR' }
+  | { type: 'SAVE_VERSION'; noteId: string }
+  | { type: 'RESTORE_VERSION'; versionId: string }
+  | { type: 'DELETE_NOTE_VERSIONS'; noteId: string };
 
 const NOTE_COLORS = [
   '#00A82D', '#0066CC', '#CC3300', '#FF6600',
@@ -46,6 +50,7 @@ function reducer(state: AppState, action: Action): AppState {
         notes: action.notes,
         notebooks: action.notebooks,
         tags: action.tags,
+        versions: action.versions,
       };
     case 'SET_VIEW':
       return {
@@ -104,7 +109,9 @@ function reducer(state: AppState, action: Action): AppState {
       const notes = state.notes.filter(n => n.id !== action.noteId);
       saveNotes(notes);
       const selectedNoteId = state.selectedNoteId === action.noteId ? null : state.selectedNoteId;
-      return { ...state, notes, selectedNoteId };
+      const versionsAfterDelete = state.versions.filter(v => v.noteId !== action.noteId);
+      saveVersions(versionsAfterDelete);
+      return { ...state, notes, selectedNoteId, versions: versionsAfterDelete };
     }
     case 'TOGGLE_PIN': {
       const notes = state.notes.map(n =>
@@ -186,6 +193,41 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarOpen: !state.sidebarOpen };
+    case 'SAVE_VERSION': {
+      const noteToSnapshot = state.notes.find(n => n.id === action.noteId);
+      if (!noteToSnapshot || !noteToSnapshot.content) return state;
+      const noteVersions = state.versions.filter(v => v.noteId === action.noteId);
+      const mostRecent = noteVersions.sort((a, b) => b.savedAt - a.savedAt)[0];
+      if (mostRecent && mostRecent.content === noteToSnapshot.content) return state;
+      const newVersion: NoteVersion = {
+        id: generateId(),
+        noteId: action.noteId,
+        title: noteToSnapshot.title,
+        content: noteToSnapshot.content,
+        savedAt: Date.now(),
+      };
+      const allVersionsForNote = [newVersion, ...noteVersions].slice(0, 20);
+      const otherVersions = state.versions.filter(v => v.noteId !== action.noteId);
+      const versions = [...otherVersions, ...allVersionsForNote];
+      saveVersions(versions);
+      return { ...state, versions };
+    }
+    case 'RESTORE_VERSION': {
+      const version = state.versions.find(v => v.id === action.versionId);
+      if (!version) return state;
+      const notes = state.notes.map(n =>
+        n.id === version.noteId
+          ? { ...n, title: version.title, content: version.content, updatedAt: Date.now() }
+          : n
+      );
+      saveNotes(notes);
+      return { ...state, notes };
+    }
+    case 'DELETE_NOTE_VERSIONS': {
+      const versions = state.versions.filter(v => v.noteId !== action.noteId);
+      saveVersions(versions);
+      return { ...state, versions };
+    }
     default:
       return state;
   }
@@ -195,6 +237,7 @@ const initialState: AppState = {
   notes: loadNotes(),
   notebooks: loadNotebooks(),
   tags: loadTags(),
+  versions: loadVersions(),
   selectedNoteId: null,
   selectedNotebookId: null,
   selectedTagId: null,
@@ -218,12 +261,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadDataFromFiles().then(data => {
       if (data) {
         // Files exist — use them as the authoritative source
-        dispatch({ type: 'LOAD_DATA', notes: data.notes, notebooks: data.notebooks, tags: data.tags });
+        dispatch({ type: 'LOAD_DATA', notes: data.notes, notebooks: data.notebooks, tags: data.tags, versions: data.versions });
       } else if (isTauriApp()) {
         // First Tauri launch — write localStorage data to files now
         saveNotes(initialState.notes);
         saveNotebooks(initialState.notebooks);
         saveTags(initialState.tags);
+        saveVersions(initialState.versions);
       }
 
       // Purge any legacy base64 images and auto-select first note

@@ -1,10 +1,11 @@
-import { Note, Notebook, Tag } from '../types';
+import { Note, Notebook, Tag, NoteVersion } from '../types';
 import { isTauriApp } from './tauri';
 
 const KEYS = {
   notes: 'evnote_notes',
   notebooks: 'evnote_notebooks',
   tags: 'evnote_tags',
+  versions: 'evnote_versions',
 };
 
 // Fire-and-forget: write JSON to data/{filename} next to the executable
@@ -43,6 +44,11 @@ export function loadTags(): Tag[] {
   catch { return []; }
 }
 
+export function loadVersions(): NoteVersion[] {
+  try { return JSON.parse(localStorage.getItem(KEYS.versions) || '[]'); }
+  catch { return []; }
+}
+
 // ─── Save (sync to localStorage + async to file) ─────────────────────────────
 
 export function saveNotes(notes: Note[]): void {
@@ -60,21 +66,28 @@ export function saveTags(tags: Tag[]): void {
   writeDataFile('tags.json', tags);
 }
 
+export function saveVersions(versions: NoteVersion[]): void {
+  localStorage.setItem(KEYS.versions, JSON.stringify(versions));
+  writeDataFile('versions.json', versions);
+}
+
 // ─── Async init from files (Tauri only) ──────────────────────────────────────
 
 export async function loadDataFromFiles(): Promise<{
   notes: Note[];
   notebooks: Notebook[];
   tags: Tag[];
+  versions: NoteVersion[];
 } | null> {
   if (!isTauriApp()) return null;
 
   try {
     const { invoke } = await import('@tauri-apps/api/core');
-    const [notesStr, notebooksStr, tagsStr] = await Promise.all([
+    const [notesStr, notebooksStr, tagsStr, versionsStr] = await Promise.all([
       invoke<string>('read_data_file', { filename: 'notes.json' }),
       invoke<string>('read_data_file', { filename: 'notebooks.json' }),
       invoke<string>('read_data_file', { filename: 'tags.json' }),
+      invoke<string>('read_data_file', { filename: 'versions.json' }),
     ]);
 
     // All empty → first launch in Tauri, no files yet
@@ -84,6 +97,7 @@ export async function loadDataFromFiles(): Promise<{
       notes:     notesStr     ? JSON.parse(notesStr)     : loadNotes(),
       notebooks: notebooksStr ? JSON.parse(notebooksStr) : loadNotebooks(),
       tags:      tagsStr      ? JSON.parse(tagsStr)      : loadTags(),
+      versions:  versionsStr  ? JSON.parse(versionsStr)  : loadVersions(),
     };
   } catch (e) {
     console.error('Failed to load data from files:', e);

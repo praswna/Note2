@@ -4,10 +4,11 @@ import {
   AlignLeft, AlignCenter, AlignRight,
   Pin, Trash2, Tag, ChevronDown, X, Check,
   Maximize2, Minimize2, Type, Strikethrough,
-  Highlighter,
+  Highlighter, History,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { saveImageFile } from '../utils/imageStorage';
+import { NoteVersion } from '../types';
 
 type FormatCommand = 'bold' | 'italic' | 'underline' | 'strikethrough' | 'insertUnorderedList' | 'insertOrderedList' | 'justifyLeft' | 'justifyCenter' | 'justifyRight';
 
@@ -21,16 +22,23 @@ export default function Editor() {
   const [fullscreen, setFullscreen] = useState(false);
   const [fontSize, setFontSize] = useState('16');
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [selectedVersion, setSelectedVersion] = useState<NoteVersion | null>(null);
 
   const editorRef = useRef<HTMLDivElement>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedId = useRef<string | null>(null);
   const currentNoteIdRef = useRef<string | null>(null);
+  const prevNoteIdRef = useRef<string | null>(null);
   // Tracks the notebook tree path (root → leaf names) for the current note
   const notebookPathRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!note) return;
+    if (prevNoteIdRef.current && prevNoteIdRef.current !== note.id) {
+      dispatch({ type: 'SAVE_VERSION', noteId: prevNoteIdRef.current });
+    }
+    prevNoteIdRef.current = note.id;
     if (saveTimeout.current) {
       clearTimeout(saveTimeout.current);
       saveTimeout.current = null;
@@ -41,6 +49,8 @@ export default function Editor() {
       editorRef.current.innerHTML = note.content;
       lastSavedId.current = note.id;
     }
+    setHistoryOpen(false);
+    setSelectedVersion(null);
   }, [note?.id]);
 
   // Keep notebookPathRef in sync whenever the note's notebook changes
@@ -284,13 +294,22 @@ export default function Editor() {
 
         <div className="editor-actions">
           {!isTrash && (
-            <button
-              className={`action-btn ${note.isPinned ? 'active' : ''}`}
-              onClick={() => dispatch({ type: 'TOGGLE_PIN', noteId: note.id })}
-              title={note.isPinned ? '고정 해제' : '고정'}
-            >
-              <Pin size={16} />
-            </button>
+            <>
+              <button
+                className={`action-btn ${note.isPinned ? 'active' : ''}`}
+                onClick={() => dispatch({ type: 'TOGGLE_PIN', noteId: note.id })}
+                title={note.isPinned ? '고정 해제' : '고정'}
+              >
+                <Pin size={16} />
+              </button>
+              <button
+                className={`action-btn ${historyOpen ? 'active' : ''}`}
+                onClick={() => setHistoryOpen(o => !o)}
+                title="버전 기록"
+              >
+                <History size={16} />
+              </button>
+            </>
           )}
           {isTrash ? (
             <button
@@ -360,35 +379,120 @@ export default function Editor() {
         </div>
       )}
 
-      <div className="editor-content">
-        <input
-          className="note-title-input"
-          placeholder="제목..."
-          value={title}
-          onChange={e => handleTitleChange(e.target.value)}
-          disabled={isTrash}
-        />
-        <div className="note-body-wrapper">
-          <div
-            ref={editorRef}
-            className={`note-body ${isTrash ? 'readonly' : ''}`}
-            contentEditable={!isTrash}
-            suppressContentEditableWarning
-            onInput={handleEditorInput}
-            onBlur={saveContent}
-            onPaste={isTrash ? undefined : handlePaste}
-            onDragOver={isTrash ? undefined : handleDragOver}
-            onDragLeave={isTrash ? undefined : handleDragLeave}
-            onDrop={isTrash ? undefined : handleDrop}
-            data-placeholder="여기에 노트를 작성하세요..."
-          />
-          {isDraggingOver && (
-            <div className="drag-overlay">
-              <div className="drag-overlay-inner">이미지를 여기에 놓으세요</div>
+      {historyOpen ? (
+        (() => {
+          const noteVersions = state.versions
+            .filter(v => v.noteId === note.id)
+            .sort((a, b) => b.savedAt - a.savedAt);
+
+          function formatVersionDate(ts: number): string {
+            const d = new Date(ts);
+            const now = new Date();
+            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+            const yesterdayStart = todayStart - 86400000;
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            if (ts >= todayStart) return `오늘 ${hh}:${mm}`;
+            if (ts >= yesterdayStart) return `어제 ${hh}:${mm}`;
+            return `${d.getMonth() + 1}월 ${d.getDate()}일 ${hh}:${mm}`;
+          }
+
+          return (
+            <div className="history-panel">
+              <div className="history-header">
+                <button
+                  className="action-btn"
+                  onClick={() => { setHistoryOpen(false); setSelectedVersion(null); }}
+                  title="닫기"
+                >
+                  <X size={16} />
+                  <span style={{ marginLeft: 4, fontSize: 13 }}>닫기</span>
+                </button>
+                <span style={{ flex: 1, fontWeight: 600, fontSize: 14, paddingLeft: 8 }}>
+                  버전 기록 ({noteVersions.length}개)
+                </span>
+                <button
+                  className="action-btn"
+                  disabled={!selectedVersion}
+                  style={{ opacity: selectedVersion ? 1 : 0.4, fontSize: 13, width: 'auto', padding: '0 12px' }}
+                  onClick={() => {
+                    if (!selectedVersion) return;
+                    dispatch({ type: 'RESTORE_VERSION', versionId: selectedVersion.id });
+                    setHistoryOpen(false);
+                    setSelectedVersion(null);
+                  }}
+                  title="선택한 버전으로 복원"
+                >
+                  복원
+                </button>
+              </div>
+              <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+                <div className="history-list">
+                  {noteVersions.length === 0 ? (
+                    <div className="history-empty">저장된 버전이 없습니다</div>
+                  ) : (
+                    noteVersions.map(v => (
+                      <div
+                        key={v.id}
+                        className={`history-item ${selectedVersion?.id === v.id ? 'active' : ''}`}
+                        onClick={() => setSelectedVersion(v)}
+                      >
+                        {formatVersionDate(v.savedAt)}
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="history-preview">
+                  {selectedVersion ? (
+                    <>
+                      <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 12 }}>
+                        {selectedVersion.title}
+                      </div>
+                      <div
+                        className="note-body readonly"
+                        dangerouslySetInnerHTML={{ __html: selectedVersion.content }}
+                        style={{ overflow: 'auto', flex: 1 }}
+                      />
+                    </>
+                  ) : (
+                    <div className="history-empty">버전을 선택하면 미리 볼 수 있습니다</div>
+                  )}
+                </div>
+              </div>
             </div>
-          )}
+          );
+        })()
+      ) : (
+        <div className="editor-content">
+          <input
+            className="note-title-input"
+            placeholder="제목..."
+            value={title}
+            onChange={e => handleTitleChange(e.target.value)}
+            disabled={isTrash}
+          />
+          <div className="note-body-wrapper">
+            <div
+              ref={editorRef}
+              className={`note-body ${isTrash ? 'readonly' : ''}`}
+              contentEditable={!isTrash}
+              suppressContentEditableWarning
+              onInput={handleEditorInput}
+              onBlur={saveContent}
+              onPaste={isTrash ? undefined : handlePaste}
+              onDragOver={isTrash ? undefined : handleDragOver}
+              onDragLeave={isTrash ? undefined : handleDragLeave}
+              onDrop={isTrash ? undefined : handleDrop}
+              data-placeholder="여기에 노트를 작성하세요..."
+            />
+            {isDraggingOver && (
+              <div className="drag-overlay">
+                <div className="drag-overlay-inner">이미지를 여기에 놓으세요</div>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="editor-footer">
         <span>

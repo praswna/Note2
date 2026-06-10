@@ -26,10 +26,19 @@ export interface Tag {
 
 export type ViewMode = 'all' | 'notebook' | 'tag' | 'pinned' | 'trash';
 
+export interface NoteVersion {
+  id: string;
+  noteId: string;
+  title: string;
+  content: string;
+  savedAt: number;
+}
+
 export interface AppState {
   notes: Note[];
   notebooks: Notebook[];
   tags: Tag[];
+  versions: NoteVersion[];
   selectedNoteId: string | null;
   selectedNotebookId: string | null;
   selectedTagId: string | null;
