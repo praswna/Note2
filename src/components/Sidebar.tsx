@@ -68,7 +68,7 @@ export default function Sidebar() {
             <rect width="28" height="28" rx="6" fill="#00A82D" />
             <path d="M7 8h14M7 14h10M7 20h12" stroke="white" strokeWidth="2" strokeLinecap="round" />
           </svg>
-          <span className="app-name">evNote</span>
+          <span className="app-name">Note2</span>
         </div>
       </div>
 
