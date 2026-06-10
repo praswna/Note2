@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { saveImageFile } from '../utils/imageStorage';
+import { NoteVersion } from '../types';
 
 type FormatCommand = 'bold' | 'italic' | 'underline' | 'strikethrough' | 'insertUnorderedList' | 'insertOrderedList' | 'justifyLeft' | 'justifyCenter' | 'justifyRight';
 
@@ -22,6 +23,7 @@ export default function Editor() {
   const [fontSize, setFontSize] = useState('16');
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [selectedVersion, setSelectedVersion] = useState<NoteVersion | null>(null);
 
   const editorRef = useRef<HTMLDivElement>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -43,6 +45,7 @@ export default function Editor() {
       lastSavedId.current = note.id;
     }
     setHistoryOpen(false);
+    setSelectedVersion(null);
   }, [note?.id]);
 
   // Keep notebookPathRef in sync whenever the note's notebook changes
@@ -407,7 +410,7 @@ export default function Editor() {
               <div className="history-header">
                 <button
                   className="action-btn"
-                  onClick={() => setHistoryOpen(false)}
+                  onClick={() => { setHistoryOpen(false); setSelectedVersion(null); }}
                   title="닫기"
                 >
                   <X size={16} />
@@ -416,26 +419,48 @@ export default function Editor() {
                 <span style={{ flex: 1, fontWeight: 600, fontSize: 14, paddingLeft: 8 }}>
                   버전 기록 ({noteVersions.length}개)
                 </span>
-              </div>
-              <div className="history-list">
-                {noteVersions.length === 0 ? (
-                  <div className="history-empty">저장된 버전이 없습니다<br/><small>Ctrl+S로 버전을 저장하세요</small></div>
-                ) : (
-                  noteVersions.map(v => (
-                    <div key={v.id} className="history-item">
-                      <span className="history-item-date">{formatVersionDate(v.savedAt)}</span>
-                      <button
-                        className="history-restore-btn"
-                        onClick={() => {
-                          dispatch({ type: 'RESTORE_VERSION', versionId: v.id });
-                          setHistoryOpen(false);
-                        }}
-                      >
-                        복원
-                      </button>
-                    </div>
-                  ))
+                {selectedVersion && (
+                  <button
+                    className="history-restore-btn"
+                    onClick={() => {
+                      dispatch({ type: 'RESTORE_VERSION', versionId: selectedVersion.id });
+                      setHistoryOpen(false);
+                      setSelectedVersion(null);
+                    }}
+                  >
+                    복원
+                  </button>
                 )}
+              </div>
+              <div className="history-body">
+                <div className="history-list">
+                  {noteVersions.length === 0 ? (
+                    <div className="history-empty">저장된 버전이 없습니다<br/><small>Ctrl+S로 버전을 저장하세요</small></div>
+                  ) : (
+                    noteVersions.map(v => (
+                      <div
+                        key={v.id}
+                        className={`history-item ${selectedVersion?.id === v.id ? 'active' : ''}`}
+                        onClick={() => setSelectedVersion(v)}
+                      >
+                        {formatVersionDate(v.savedAt)}
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="history-preview">
+                  {selectedVersion ? (
+                    <>
+                      <div className="history-preview-title">{selectedVersion.title}</div>
+                      <div
+                        className="note-body readonly"
+                        dangerouslySetInnerHTML={{ __html: selectedVersion.content }}
+                      />
+                    </>
+                  ) : (
+                    <div className="history-empty">버전을 클릭하면 미리 볼 수 있습니다</div>
+                  )}
+                </div>
               </div>
             </div>
           );
