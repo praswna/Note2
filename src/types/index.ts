@@ -15,6 +15,7 @@ export interface Notebook {
   name: string;
   color: string;
   createdAt: number;
+  parentId?: string;
 }
 
 export interface Tag {

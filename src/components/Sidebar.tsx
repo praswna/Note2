@@ -1,58 +1,215 @@
 import { useState } from 'react';
 import {
   BookOpen, Tag, Pin, Trash2, ChevronDown, ChevronRight,
-  Plus, MoreHorizontal, Edit2, X, Check,
+  Plus, MoreHorizontal, Edit2, X, Check, FolderPlus,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { Notebook } from '../types';
 
 const NOTE_COLORS = [
   '#00A82D', '#0066CC', '#CC3300', '#FF6600',
   '#9933CC', '#00AAAA', '#CC6600', '#006633',
 ];
 
+interface AddFormProps {
+  onConfirm: (name: string, color: string) => void;
+  onCancel: () => void;
+  placeholder?: string;
+}
+
+function AddForm({ onConfirm, onCancel, placeholder = '노트북 이름...' }: AddFormProps) {
+  const [name, setName] = useState('');
+  const [color, setColor] = useState(NOTE_COLORS[0]);
+  return (
+    <div className="add-form">
+      <div className="color-picker">
+        {NOTE_COLORS.map(c => (
+          <button
+            key={c}
+            className={`color-dot ${color === c ? 'selected' : ''}`}
+            style={{ background: c }}
+            onClick={() => setColor(c)}
+          />
+        ))}
+      </div>
+      <input
+        autoFocus
+        placeholder={placeholder}
+        value={name}
+        onChange={e => setName(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { if (name.trim()) onConfirm(name.trim(), color); }
+          if (e.key === 'Escape') onCancel();
+        }}
+      />
+      <div className="add-form-actions">
+        <button className="btn-confirm" onClick={() => { if (name.trim()) onConfirm(name.trim(), color); }}>추가</button>
+        <button className="btn-cancel" onClick={onCancel}>취소</button>
+      </div>
+    </div>
+  );
+}
+
+interface NotebookNodeProps {
+  notebook: Notebook;
+  allNotebooks: Notebook[];
+  depth: number;
+  menuOpen: string | null;
+  setMenuOpen: (id: string | null) => void;
+  editingId: string | null;
+  setEditingId: (id: string | null) => void;
+  addingChildOf: string | null;
+  setAddingChildOf: (id: string | null) => void;
+}
+
+function NotebookNode({
+  notebook, allNotebooks, depth,
+  menuOpen, setMenuOpen,
+  editingId, setEditingId,
+  addingChildOf, setAddingChildOf,
+}: NotebookNodeProps) {
+  const { state, dispatch } = useApp();
+  const [expanded, setExpanded] = useState(true);
+  const [editingName, setEditingName] = useState('');
+
+  const children = allNotebooks.filter(nb => nb.parentId === notebook.id);
+  const hasChildren = children.length > 0;
+
+  // Count notes in this notebook AND all descendants
+  const collectIds = (id: string): string[] => {
+    const kids = allNotebooks.filter(nb => nb.parentId === id).map(nb => nb.id);
+    return [id, ...kids.flatMap(collectIds)];
+  };
+  const allIds = collectIds(notebook.id);
+  const count = state.notes.filter(n => allIds.includes(n.notebookId) && !n.isTrashed).length;
+
+  const isActive = state.viewMode === 'notebook' && state.selectedNotebookId === notebook.id;
+
+  function startEdit() {
+    setEditingName(notebook.name);
+    setEditingId(notebook.id);
+    setMenuOpen(null);
+  }
+
+  function confirmEdit() {
+    if (editingName.trim()) {
+      dispatch({ type: 'RENAME_NOTEBOOK', notebookId: notebook.id, name: editingName.trim() });
+    }
+    setEditingId(null);
+  }
+
+  const indent = depth * 14;
+
+  return (
+    <div>
+      <div className="section-item-wrapper">
+        {editingId === notebook.id ? (
+          <div className="inline-edit" style={{ paddingLeft: indent + 10 }}>
+            <input
+              autoFocus
+              value={editingName}
+              onChange={e => setEditingName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') confirmEdit();
+                if (e.key === 'Escape') setEditingId(null);
+              }}
+            />
+            <button onClick={confirmEdit}><Check size={12} /></button>
+            <button onClick={() => setEditingId(null)}><X size={12} /></button>
+          </div>
+        ) : (
+          <button
+            className={`nav-item ${isActive ? 'active' : ''}`}
+            style={{ paddingLeft: indent + 10 }}
+            onClick={() => dispatch({ type: 'SET_VIEW', viewMode: 'notebook', notebookId: notebook.id })}
+          >
+            {hasChildren || addingChildOf === notebook.id ? (
+              <button
+                className="expand-btn"
+                onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}
+              >
+                {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              </button>
+            ) : (
+              <span className="expand-placeholder" />
+            )}
+            <span className="notebook-dot" style={{ background: notebook.color }} />
+            <span className="nav-label">{notebook.name}</span>
+            <span className="nav-count">{count}</span>
+            <button
+              className="item-menu-btn"
+              onClick={e => { e.stopPropagation(); setMenuOpen(menuOpen === notebook.id ? null : notebook.id); }}
+            >
+              <MoreHorizontal size={12} />
+            </button>
+          </button>
+        )}
+
+        {menuOpen === notebook.id && (
+          <div className="context-menu" style={{ left: indent + 10 }}>
+            <button onClick={startEdit}>
+              <Edit2 size={12} /> 이름 변경
+            </button>
+            <button onClick={() => { setAddingChildOf(notebook.id); setExpanded(true); setMenuOpen(null); }}>
+              <FolderPlus size={12} /> 하위 노트북 추가
+            </button>
+            <button
+              className="danger"
+              onClick={() => { dispatch({ type: 'DELETE_NOTEBOOK', notebookId: notebook.id }); setMenuOpen(null); }}
+            >
+              <Trash2 size={12} /> 삭제
+            </button>
+          </div>
+        )}
+      </div>
+
+      {expanded && (
+        <div>
+          {children.map(child => (
+            <NotebookNode
+              key={child.id}
+              notebook={child}
+              allNotebooks={allNotebooks}
+              depth={depth + 1}
+              menuOpen={menuOpen}
+              setMenuOpen={setMenuOpen}
+              editingId={editingId}
+              setEditingId={setEditingId}
+              addingChildOf={addingChildOf}
+              setAddingChildOf={setAddingChildOf}
+            />
+          ))}
+          {addingChildOf === notebook.id && (
+            <div style={{ paddingLeft: (depth + 1) * 14 + 8 }}>
+              <AddForm
+                onConfirm={(name, color) => {
+                  dispatch({ type: 'CREATE_NOTEBOOK', name, color, parentId: notebook.id });
+                  setAddingChildOf(null);
+                }}
+                onCancel={() => setAddingChildOf(null)}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Sidebar() {
   const { state, dispatch } = useApp();
   const [notebooksOpen, setNotebooksOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
-  const [addingNotebook, setAddingNotebook] = useState(false);
+  const [addingRootNotebook, setAddingRootNotebook] = useState(false);
   const [addingTag, setAddingTag] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newColor, setNewColor] = useState(NOTE_COLORS[0]);
-  const [editingNotebookId, setEditingNotebookId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState('');
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [addingChildOf, setAddingChildOf] = useState<string | null>(null);
 
-  const activeNotebooks = state.notebooks;
+  const rootNotebooks = state.notebooks.filter(nb => !nb.parentId);
   const allCount = state.notes.filter(n => !n.isTrashed).length;
   const pinnedCount = state.notes.filter(n => n.isPinned && !n.isTrashed).length;
   const trashCount = state.notes.filter(n => n.isTrashed).length;
-
-  function createNotebook() {
-    if (!newName.trim()) return;
-    dispatch({ type: 'CREATE_NOTEBOOK', name: newName.trim(), color: newColor });
-    setNewName('');
-    setAddingNotebook(false);
-  }
-
-  function createTag() {
-    if (!newName.trim()) return;
-    dispatch({ type: 'CREATE_TAG', name: newName.trim(), color: newColor });
-    setNewName('');
-    setAddingTag(false);
-  }
-
-  function startEditNotebook(id: string, name: string) {
-    setEditingNotebookId(id);
-    setEditingName(name);
-    setMenuOpen(null);
-  }
-
-  function confirmEditNotebook() {
-    if (editingNotebookId && editingName.trim()) {
-      dispatch({ type: 'RENAME_NOTEBOOK', notebookId: editingNotebookId, name: editingName.trim() });
-    }
-    setEditingNotebookId(null);
-  }
 
   const isActive = (viewMode: string, id?: string) => {
     if (viewMode === 'notebook') return state.viewMode === 'notebook' && state.selectedNotebookId === id;
@@ -81,7 +238,6 @@ export default function Sidebar() {
           <span>모든 노트</span>
           <span className="nav-count">{allCount}</span>
         </button>
-
         <button
           className={`nav-item ${isActive('pinned') ? 'active' : ''}`}
           onClick={() => dispatch({ type: 'SET_VIEW', viewMode: 'pinned' })}
@@ -93,15 +249,12 @@ export default function Sidebar() {
       </nav>
 
       <div className="sidebar-section">
-        <button
-          className="section-header"
-          onClick={() => setNotebooksOpen(o => !o)}
-        >
+        <button className="section-header" onClick={() => setNotebooksOpen(o => !o)}>
           {notebooksOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <span>노트북</span>
           <button
             className="add-btn"
-            onClick={e => { e.stopPropagation(); setNewName(''); setAddingNotebook(true); setNewColor(NOTE_COLORS[0]); }}
+            onClick={e => { e.stopPropagation(); setAddingRootNotebook(true); }}
             title="노트북 추가"
           >
             <Plus size={14} />
@@ -110,101 +263,40 @@ export default function Sidebar() {
 
         {notebooksOpen && (
           <div className="section-items">
-            {activeNotebooks.map(nb => {
-              const count = state.notes.filter(n => n.notebookId === nb.id && !n.isTrashed).length;
-              return (
-                <div key={nb.id} className="section-item-wrapper">
-                  {editingNotebookId === nb.id ? (
-                    <div className="inline-edit">
-                      <input
-                        autoFocus
-                        value={editingName}
-                        onChange={e => setEditingName(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') confirmEditNotebook();
-                          if (e.key === 'Escape') setEditingNotebookId(null);
-                        }}
-                      />
-                      <button onClick={confirmEditNotebook}><Check size={12} /></button>
-                      <button onClick={() => setEditingNotebookId(null)}><X size={12} /></button>
-                    </div>
-                  ) : (
-                    <button
-                      className={`nav-item ${isActive('notebook', nb.id) ? 'active' : ''}`}
-                      onClick={() => dispatch({ type: 'SET_VIEW', viewMode: 'notebook', notebookId: nb.id })}
-                    >
-                      <span className="notebook-dot" style={{ background: nb.color }} />
-                      <span className="nav-label">{nb.name}</span>
-                      <span className="nav-count">{count}</span>
-                      <button
-                        className="item-menu-btn"
-                        onClick={e => { e.stopPropagation(); setMenuOpen(menuOpen === nb.id ? null : nb.id); }}
-                      >
-                        <MoreHorizontal size={12} />
-                      </button>
-                    </button>
-                  )}
-                  {menuOpen === nb.id && (
-                    <div className="context-menu">
-                      <button onClick={() => startEditNotebook(nb.id, nb.name)}>
-                        <Edit2 size={12} /> 이름 변경
-                      </button>
-                      <button
-                        className="danger"
-                        onClick={() => {
-                          dispatch({ type: 'DELETE_NOTEBOOK', notebookId: nb.id });
-                          setMenuOpen(null);
-                        }}
-                      >
-                        <Trash2 size={12} /> 삭제
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {addingNotebook && (
-              <div className="add-form">
-                <div className="color-picker">
-                  {NOTE_COLORS.map(c => (
-                    <button
-                      key={c}
-                      className={`color-dot ${newColor === c ? 'selected' : ''}`}
-                      style={{ background: c }}
-                      onClick={() => setNewColor(c)}
-                    />
-                  ))}
-                </div>
-                <input
-                  autoFocus
-                  placeholder="노트북 이름..."
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') createNotebook();
-                    if (e.key === 'Escape') setAddingNotebook(false);
-                  }}
-                />
-                <div className="add-form-actions">
-                  <button className="btn-confirm" onClick={createNotebook}>추가</button>
-                  <button className="btn-cancel" onClick={() => setAddingNotebook(false)}>취소</button>
-                </div>
-              </div>
+            {rootNotebooks.map(nb => (
+              <NotebookNode
+                key={nb.id}
+                notebook={nb}
+                allNotebooks={state.notebooks}
+                depth={0}
+                menuOpen={menuOpen}
+                setMenuOpen={setMenuOpen}
+                editingId={editingId}
+                setEditingId={setEditingId}
+                addingChildOf={addingChildOf}
+                setAddingChildOf={setAddingChildOf}
+              />
+            ))}
+            {addingRootNotebook && (
+              <AddForm
+                onConfirm={(name, color) => {
+                  dispatch({ type: 'CREATE_NOTEBOOK', name, color });
+                  setAddingRootNotebook(false);
+                }}
+                onCancel={() => setAddingRootNotebook(false)}
+              />
             )}
           </div>
         )}
       </div>
 
       <div className="sidebar-section">
-        <button
-          className="section-header"
-          onClick={() => setTagsOpen(o => !o)}
-        >
+        <button className="section-header" onClick={() => setTagsOpen(o => !o)}>
           {tagsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <span>태그</span>
           <button
             className="add-btn"
-            onClick={e => { e.stopPropagation(); setNewName(''); setAddingTag(true); setNewColor(NOTE_COLORS[2]); }}
+            onClick={e => { e.stopPropagation(); setAddingTag(true); }}
             title="태그 추가"
           >
             <Plus size={14} />
@@ -221,6 +313,7 @@ export default function Sidebar() {
                     className={`nav-item ${isActive('tag', tag.id) ? 'active' : ''}`}
                     onClick={() => dispatch({ type: 'SET_VIEW', viewMode: 'tag', tagId: tag.id })}
                   >
+                    <span className="expand-placeholder" />
                     <Tag size={14} style={{ color: tag.color }} />
                     <span className="nav-label">{tag.name}</span>
                     <span className="nav-count">{count}</span>
@@ -236,32 +329,14 @@ export default function Sidebar() {
               );
             })}
             {addingTag && (
-              <div className="add-form">
-                <div className="color-picker">
-                  {NOTE_COLORS.map(c => (
-                    <button
-                      key={c}
-                      className={`color-dot ${newColor === c ? 'selected' : ''}`}
-                      style={{ background: c }}
-                      onClick={() => setNewColor(c)}
-                    />
-                  ))}
-                </div>
-                <input
-                  autoFocus
-                  placeholder="태그 이름..."
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') createTag();
-                    if (e.key === 'Escape') setAddingTag(false);
-                  }}
-                />
-                <div className="add-form-actions">
-                  <button className="btn-confirm" onClick={createTag}>추가</button>
-                  <button className="btn-cancel" onClick={() => setAddingTag(false)}>취소</button>
-                </div>
-              </div>
+              <AddForm
+                placeholder="태그 이름..."
+                onConfirm={(name, color) => {
+                  dispatch({ type: 'CREATE_TAG', name, color });
+                  setAddingTag(false);
+                }}
+                onCancel={() => setAddingTag(false)}
+              />
             )}
           </div>
         )}

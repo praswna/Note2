@@ -17,9 +17,10 @@ export type Action =
   | { type: 'TRASH_NOTE'; noteId: string }
   | { type: 'RESTORE_NOTE'; noteId: string }
   | { type: 'TOGGLE_PIN'; noteId: string }
-  | { type: 'CREATE_NOTEBOOK'; name: string; color: string }
+  | { type: 'CREATE_NOTEBOOK'; name: string; color: string; parentId?: string }
   | { type: 'RENAME_NOTEBOOK'; notebookId: string; name: string }
   | { type: 'DELETE_NOTEBOOK'; notebookId: string }
+  | { type: 'MOVE_NOTEBOOK'; notebookId: string; parentId: string | undefined }
   | { type: 'CREATE_TAG'; name: string; color: string }
   | { type: 'DELETE_TAG'; tagId: string }
   | { type: 'TOGGLE_SIDEBAR' };
@@ -107,6 +108,7 @@ function reducer(state: AppState, action: Action): AppState {
         name: action.name,
         color: action.color || getRandomColor(),
         createdAt: Date.now(),
+        parentId: action.parentId,
       };
       const notebooks = [...state.notebooks, notebook];
       saveNotebooks(notebooks);
@@ -120,15 +122,29 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, notebooks };
     }
     case 'DELETE_NOTEBOOK': {
-      const notebooks = state.notebooks.filter(nb => nb.id !== action.notebookId);
+      // Collect IDs of the deleted notebook and all its descendants
+      const toDelete = new Set<string>();
+      const collect = (id: string) => {
+        toDelete.add(id);
+        state.notebooks.filter(nb => nb.parentId === id).forEach(c => collect(c.id));
+      };
+      collect(action.notebookId);
+
+      const notebooks = state.notebooks.filter(nb => !toDelete.has(nb.id));
+      const fallbackId = notebooks[0]?.id ?? 'default';
       const notes = state.notes.map(n =>
-        n.notebookId === action.notebookId
-          ? { ...n, notebookId: notebooks[0]?.id ?? 'default' }
-          : n
+        toDelete.has(n.notebookId) ? { ...n, notebookId: fallbackId } : n
       );
       saveNotebooks(notebooks);
       saveNotes(notes);
       return { ...state, notebooks, notes };
+    }
+    case 'MOVE_NOTEBOOK': {
+      const notebooks = state.notebooks.map(nb =>
+        nb.id === action.notebookId ? { ...nb, parentId: action.parentId } : nb
+      );
+      saveNotebooks(notebooks);
+      return { ...state, notebooks };
     }
     case 'CREATE_TAG': {
       const tag: Tag = {
