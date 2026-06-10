@@ -1,12 +1,43 @@
 use std::fs;
 
-fn images_dir() -> Result<std::path::PathBuf, String> {
-    let dir = std::env::current_exe()
+const ALLOWED_DATA_FILES: &[&str] = &["notes.json", "notebooks.json", "tags.json"];
+
+fn exe_dir() -> Result<std::path::PathBuf, String> {
+    std::env::current_exe()
         .map_err(|e| e.to_string())?
         .parent()
-        .ok_or_else(|| "Cannot determine executable directory".to_string())?
-        .join("images");
-    Ok(dir)
+        .ok_or_else(|| "Cannot determine executable directory".to_string())
+        .map(|p| p.to_path_buf())
+}
+
+fn images_dir() -> Result<std::path::PathBuf, String> {
+    Ok(exe_dir()?.join("images"))
+}
+
+fn data_dir() -> Result<std::path::PathBuf, String> {
+    Ok(exe_dir()?.join("data"))
+}
+
+#[tauri::command]
+fn read_data_file(filename: String) -> Result<String, String> {
+    if !ALLOWED_DATA_FILES.contains(&filename.as_str()) {
+        return Err(format!("Not allowed: {}", filename));
+    }
+    let path = data_dir()?.join(&filename);
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn write_data_file(filename: String, content: String) -> Result<(), String> {
+    if !ALLOWED_DATA_FILES.contains(&filename.as_str()) {
+        return Err(format!("Not allowed: {}", filename));
+    }
+    let dir = data_dir()?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join(&filename), content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -48,7 +79,12 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![save_image, delete_image])
+        .invoke_handler(tauri::generate_handler![
+            save_image,
+            delete_image,
+            read_data_file,
+            write_data_file,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

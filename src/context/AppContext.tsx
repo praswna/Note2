@@ -1,13 +1,16 @@
-import { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useReducer, useEffect, useState, ReactNode } from 'react';
 import { AppState, Note, Notebook, Tag, ViewMode } from '../types';
 import {
   loadNotes, saveNotes,
   loadNotebooks, saveNotebooks,
   loadTags, saveTags,
+  loadDataFromFiles,
   generateId,
 } from '../utils/storage';
+import { isTauriApp } from '../utils/tauri';
 
 export type Action =
+  | { type: 'LOAD_DATA'; notes: Note[]; notebooks: Notebook[]; tags: Tag[] }
   | { type: 'SET_VIEW'; viewMode: ViewMode; notebookId?: string; tagId?: string }
   | { type: 'SELECT_NOTE'; noteId: string | null }
   | { type: 'SET_SEARCH'; query: string }
@@ -37,6 +40,13 @@ function getRandomColor(): string {
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
+    case 'LOAD_DATA':
+      return {
+        ...state,
+        notes: action.notes,
+        notebooks: action.notebooks,
+        tags: action.tags,
+      };
     case 'SET_VIEW':
       return {
         ...state,
@@ -202,20 +212,41 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [ready, setReady] = useState(!isTauriApp());
 
   useEffect(() => {
-    if (state.notes.length > 0 && !state.selectedNoteId) {
-      const firstActive = state.notes.find(n => !n.isTrashed);
+    loadDataFromFiles().then(data => {
+      if (data) {
+        // Files exist — use them as the authoritative source
+        dispatch({ type: 'LOAD_DATA', notes: data.notes, notebooks: data.notebooks, tags: data.tags });
+      } else if (isTauriApp()) {
+        // First Tauri launch — write localStorage data to files now
+        saveNotes(initialState.notes);
+        saveNotebooks(initialState.notebooks);
+        saveTags(initialState.tags);
+      }
+
+      // Purge any legacy base64 images and auto-select first note
+      const notes = data?.notes ?? initialState.notes;
+      notes.forEach(note => {
+        if (!note.content.includes('data:image/')) return;
+        const doc = new DOMParser().parseFromString(note.content, 'text/html');
+        doc.querySelectorAll('img[src^="data:image/"]').forEach(img => img.remove());
+        dispatch({ type: 'UPDATE_NOTE', note: { id: note.id, content: doc.body.innerHTML } });
+      });
+
+      const firstActive = notes.find(n => !n.isTrashed);
       if (firstActive) dispatch({ type: 'SELECT_NOTE', noteId: firstActive.id });
-    }
-    // Purge any base64 images left in existing notes
-    state.notes.forEach(note => {
-      if (!note.content.includes('data:image/')) return;
-      const doc = new DOMParser().parseFromString(note.content, 'text/html');
-      doc.querySelectorAll('img[src^="data:image/"]').forEach(img => img.remove());
-      dispatch({ type: 'UPDATE_NOTE', note: { id: note.id, content: doc.body.innerHTML } });
+
+      setReady(true);
     });
   }, []);
+
+  if (!ready) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#999', fontSize: 14 }}>
+      불러오는 중...
+    </div>
+  );
 
   return <AppContext.Provider value={{ state, dispatch }}>{children}</AppContext.Provider>;
 }

@@ -1,15 +1,10 @@
-export const isTauriApp = (): boolean =>
-  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+import { isTauriApp } from './tauri';
+export { isTauriApp } from './tauri';
 
-// Strip characters that are unsafe in directory names on all platforms
 function sanitizeDirName(name: string): string {
   return name.replace(/[/\\:*?"<>|]/g, '_').trim() || '_';
 }
 
-/**
- * Saves an image file under {appLocalDataDir}/images/{notebookPath...}/{uuid}.{ext}
- * so the folder structure mirrors the notebook tree.
- */
 export async function saveImageFile(dataUrl: string, notebookPath: string[]): Promise<string> {
   if (!isTauriApp()) throw new Error('Image storage requires Tauri desktop app');
 
