@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import {
   BookOpen, Tag, Pin, Trash2, ChevronDown, ChevronRight,
   Plus, Edit2, X, Check, FolderPlus,
-  ChevronsDownUp, ChevronsUpDown,
+  ChevronsDownUp, ChevronsUpDown, GripVertical,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Notebook } from '../types';
@@ -77,6 +77,8 @@ interface NotebookNodeProps {
   onReorder: (notebookId: string, beforeId: string | null, parentId: string | undefined) => void;
   selectedNbIds: Set<string>;
   setSelectedNbIds: (ids: Set<string>) => void;
+  draggingId: string | null;
+  setDraggingId: (id: string | null) => void;
 }
 
 function NotebookNode({
@@ -87,6 +89,7 @@ function NotebookNode({
   onCreateChild,
   draggingNbRef, dragOverRef, dropLineId, setDropLineId, onReorder,
   selectedNbIds, setSelectedNbIds,
+  draggingId, setDraggingId,
 }: NotebookNodeProps) {
   const { state, dispatch } = useApp();
   const [dragOver, setDragOver] = useState(false);
@@ -140,7 +143,7 @@ function NotebookNode({
           </div>
         ) : (
           <div
-            className={`nav-item ${isActive ? 'active' : ''} ${selectedNbIds.has(notebook.id) ? 'nb-selected' : ''} ${dragOver ? 'drop-target' : ''} ${dropLineId === `${notebook.id}:before` ? 'nb-drop-before' : dropLineId === `${notebook.id}:after` ? 'nb-drop-after' : ''}`}
+            className={`nav-item ${isActive ? 'active' : ''} ${selectedNbIds.has(notebook.id) ? 'nb-selected' : ''} ${dragOver ? 'drop-target' : ''} ${dropLineId === `${notebook.id}:before` ? 'nb-drop-before' : dropLineId === `${notebook.id}:after` ? 'nb-drop-after' : ''} ${draggingId === notebook.id ? 'nb-dragging' : ''}`}
             style={{ paddingLeft: indent + 10 }}
             role="button"
             tabIndex={0}
@@ -149,11 +152,13 @@ function NotebookNode({
               e.dataTransfer.setData('text/notebook-id', notebook.id);
               e.dataTransfer.effectAllowed = 'move';
               draggingNbRef.current = notebook.id;
+              setTimeout(() => setDraggingId(notebook.id), 0);
             }}
             onDragEnd={() => {
               draggingNbRef.current = null;
               dragOverRef.current = null;
               setDropLineId(null);
+              setDraggingId(null);
             }}
             onClick={e => {
               if (e.ctrlKey || e.metaKey) {
@@ -178,11 +183,16 @@ function NotebookNode({
                 return;
               }
               if (!draggingNbRef.current || draggingNbRef.current === notebook.id) return;
+              const draggingNb = allNotebooks.find(nb => nb.id === draggingNbRef.current);
+              if ((draggingNb?.parentId === undefined) !== (notebook.parentId === undefined)) return;
               e.dataTransfer.dropEffect = 'move';
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
               const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
-              dragOverRef.current = { id: notebook.id, pos };
-              setDropLineId(`${notebook.id}:${pos}`);
+              const newId = `${notebook.id}:${pos}`;
+              if (dragOverRef.current?.id !== notebook.id || dragOverRef.current?.pos !== pos) {
+                dragOverRef.current = { id: notebook.id, pos };
+                setDropLineId(newId);
+              }
             }}
             onDragLeave={e => {
               if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
@@ -205,17 +215,23 @@ function NotebookNode({
               }
               const nbId = draggingNbRef.current;
               if (nbId && nbId !== notebook.id) {
-                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
-                const siblings = allNotebooks.filter(nb => nb.parentId === notebook.parentId);
-                const afterSibling = siblings.find((_, i, arr) => arr[i - 1]?.id === notebook.id)?.id ?? null;
-                onReorder(nbId, pos === 'before' ? notebook.id : afterSibling, notebook.parentId);
+                const draggingNb = allNotebooks.find(nb => nb.id === nbId);
+                if ((draggingNb?.parentId === undefined) === (notebook.parentId === undefined)) {
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                  const siblings = allNotebooks.filter(nb => nb.parentId === notebook.parentId);
+                  const afterSibling = siblings.find((_, i, arr) => arr[i - 1]?.id === notebook.id)?.id ?? null;
+                  onReorder(nbId, pos === 'before' ? notebook.id : afterSibling, notebook.parentId);
+                }
               }
               draggingNbRef.current = null;
               dragOverRef.current = null;
               setDropLineId(null);
             }}
           >
+            <span className="drag-handle" draggable={false}>
+              <GripVertical size={12} />
+            </span>
             {hasChildren ? (
               <button
                 className="expand-btn"
@@ -316,6 +332,8 @@ function NotebookNode({
               onReorder={onReorder}
               selectedNbIds={selectedNbIds}
               setSelectedNbIds={setSelectedNbIds}
+              draggingId={draggingId}
+              setDraggingId={setDraggingId}
             />
           ))}
         </div>
@@ -340,6 +358,7 @@ export default function Sidebar() {
   const dragOverRef = useRef<{ id: string; pos: 'before' | 'after' } | null>(null);
   const [dropLineId, setDropLineId] = useState<string | null>(null);
   const [selectedNbIds, setSelectedNbIds] = useState<Set<string>>(new Set());
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   useEffect(() => {
     setExpandedIds(prev => {
@@ -367,7 +386,10 @@ export default function Sidebar() {
 
   function createNotebook(parentId?: string) {
     const id = generateId();
-    dispatch({ type: 'CREATE_NOTEBOOK', id, name: '새 노트북', color: getNextColor(), parentId });
+    const color = parentId
+      ? (state.notebooks.find(nb => nb.id === parentId)?.color ?? getNextColor())
+      : getNextColor();
+    dispatch({ type: 'CREATE_NOTEBOOK', id, name: '새 노트북', color, parentId });
     setEditingId(id);
     setEditingName('새 노트북');
   }
@@ -513,6 +535,8 @@ export default function Sidebar() {
                 }
                 selectedNbIds={selectedNbIds}
                 setSelectedNbIds={setSelectedNbIds}
+                draggingId={draggingId}
+                setDraggingId={setDraggingId}
               />
             ))}
           </div>
