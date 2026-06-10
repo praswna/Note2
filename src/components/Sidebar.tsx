@@ -1,15 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   BookOpen, Tag, Pin, Trash2, ChevronDown, ChevronRight,
-  Plus, MoreHorizontal, Edit2, X, Check, FolderPlus,
-  ChevronsDownUp, ChevronsUpDown, Palette,
+  Plus, Edit2, X, Check, FolderPlus,
+  ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Notebook } from '../types';
+import { generateId } from '../utils/storage';
 
 const NOTE_COLORS = [
-  '#00A82D', '#0066CC', '#CC3300', '#FF6600',
-  '#9933CC', '#00AAAA', '#CC6600', '#006633',
+  '#EAFFD0', '#FFF799', '#FFD150', '#95E1D3',
+  '#91D06C', '#FF9760', '#f8961e', '#F38181',
+  '#f3722c', '#f94144', '#F26076', '#43aa8b',
+  '#4C8CE4', '#458B73', '#577590', '#406093',
 ];
 
 interface AddFormProps {
@@ -18,7 +21,7 @@ interface AddFormProps {
   placeholder?: string;
 }
 
-function AddForm({ onConfirm, onCancel, placeholder = '노트북 이름...' }: AddFormProps) {
+function AddForm({ onConfirm, onCancel, placeholder = '태그 이름...' }: AddFormProps) {
   const [name, setName] = useState('');
   const [color, setColor] = useState(NOTE_COLORS[0]);
   return (
@@ -59,27 +62,34 @@ interface NotebookNodeProps {
   setMenuOpen: (id: string | null) => void;
   editingId: string | null;
   setEditingId: (id: string | null) => void;
-  addingChildOf: string | null;
-  setAddingChildOf: (id: string | null) => void;
+  setEditingName: (name: string) => void;
+  editingName: string;
   expandedIds: Set<string>;
   onToggle: (id: string) => void;
   onExpand: (id: string) => void;
   onExpandAll: (fromId: string) => void;
   onCollapseAll: (fromId: string) => void;
-  colorPickerId: string | null;
-  setColorPickerId: (id: string | null) => void;
+  onCreateChild: (parentId: string) => void;
+  draggingNbRef: React.MutableRefObject<string | null>;
+  dragOverRef: React.MutableRefObject<{ id: string; pos: 'before' | 'after' } | null>;
+  dropLineId: string | null;
+  setDropLineId: (id: string | null) => void;
+  onReorder: (notebookId: string, beforeId: string | null, parentId: string | undefined) => void;
+  selectedNbIds: Set<string>;
+  setSelectedNbIds: (ids: Set<string>) => void;
 }
 
 function NotebookNode({
   notebook, allNotebooks, depth,
   menuOpen, setMenuOpen,
-  editingId, setEditingId,
-  addingChildOf, setAddingChildOf,
+  editingId, setEditingId, editingName, setEditingName,
   expandedIds, onToggle, onExpand, onExpandAll, onCollapseAll,
-  colorPickerId, setColorPickerId,
+  onCreateChild,
+  draggingNbRef, dragOverRef, dropLineId, setDropLineId, onReorder,
+  selectedNbIds, setSelectedNbIds,
 }: NotebookNodeProps) {
   const { state, dispatch } = useApp();
-  const [editingName, setEditingName] = useState('');
+  const [dragOver, setDragOver] = useState(false);
 
   const expanded = expandedIds.has(notebook.id);
   const children = allNotebooks.filter(nb => nb.parentId === notebook.id);
@@ -118,6 +128,8 @@ function NotebookNode({
               autoFocus
               value={editingName}
               onChange={e => setEditingName(e.target.value)}
+              onFocus={e => e.target.select()}
+              onBlur={confirmEdit}
               onKeyDown={e => {
                 if (e.key === 'Enter') confirmEdit();
                 if (e.key === 'Escape') setEditingId(null);
@@ -128,16 +140,86 @@ function NotebookNode({
           </div>
         ) : (
           <div
-            className={`nav-item ${isActive ? 'active' : ''}`}
+            className={`nav-item ${isActive ? 'active' : ''} ${selectedNbIds.has(notebook.id) ? 'nb-selected' : ''} ${dragOver ? 'drop-target' : ''} ${dropLineId === `${notebook.id}:before` ? 'nb-drop-before' : dropLineId === `${notebook.id}:after` ? 'nb-drop-after' : ''}`}
             style={{ paddingLeft: indent + 10 }}
             role="button"
             tabIndex={0}
-            onClick={() => dispatch({ type: 'SET_VIEW', viewMode: 'notebook', notebookId: notebook.id })}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') dispatch({ type: 'SET_VIEW', viewMode: 'notebook', notebookId: notebook.id }); }}
+            draggable
+            onDragStart={e => {
+              e.dataTransfer.setData('text/notebook-id', notebook.id);
+              e.dataTransfer.effectAllowed = 'move';
+              draggingNbRef.current = notebook.id;
+            }}
+            onDragEnd={() => {
+              draggingNbRef.current = null;
+              dragOverRef.current = null;
+              setDropLineId(null);
+            }}
+            onClick={e => {
+              if (e.ctrlKey || e.metaKey) {
+                const next = new Set(selectedNbIds);
+                if (next.has(notebook.id)) next.delete(notebook.id); else next.add(notebook.id);
+                setSelectedNbIds(next);
+              } else {
+                setSelectedNbIds(new Set());
+                dispatch({ type: 'SET_VIEW', viewMode: 'notebook', notebookId: notebook.id });
+              }
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') dispatch({ type: 'SET_VIEW', viewMode: 'notebook', notebookId: notebook.id });
+              if (e.key === 'F2') startEdit();
+            }}
+            onContextMenu={e => { e.preventDefault(); setMenuOpen(menuOpen === notebook.id ? null : notebook.id); }}
+            onDragOver={e => {
+              e.preventDefault();
+              if (e.dataTransfer.types.includes('text/note-id')) {
+                e.dataTransfer.dropEffect = 'move';
+                setDragOver(true);
+                return;
+              }
+              if (!draggingNbRef.current || draggingNbRef.current === notebook.id) return;
+              e.dataTransfer.dropEffect = 'move';
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+              dragOverRef.current = { id: notebook.id, pos };
+              setDropLineId(`${notebook.id}:${pos}`);
+            }}
+            onDragLeave={e => {
+              if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+                setDragOver(false);
+                if (dragOverRef.current?.id === notebook.id) {
+                  dragOverRef.current = null;
+                  setDropLineId(null);
+                }
+              }
+            }}
+            onDrop={e => {
+              e.preventDefault();
+              setDragOver(false);
+              const noteId = e.dataTransfer.getData('text/note-id');
+              if (noteId) {
+                dispatch({ type: 'UPDATE_NOTE', note: { id: noteId, notebookId: notebook.id } });
+                dragOverRef.current = null;
+                setDropLineId(null);
+                return;
+              }
+              const nbId = draggingNbRef.current;
+              if (nbId && nbId !== notebook.id) {
+                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                const siblings = allNotebooks.filter(nb => nb.parentId === notebook.parentId);
+                const afterSibling = siblings.find((_, i, arr) => arr[i - 1]?.id === notebook.id)?.id ?? null;
+                onReorder(nbId, pos === 'before' ? notebook.id : afterSibling, notebook.parentId);
+              }
+              draggingNbRef.current = null;
+              dragOverRef.current = null;
+              setDropLineId(null);
+            }}
           >
-            {hasChildren || addingChildOf === notebook.id ? (
+            {hasChildren ? (
               <button
                 className="expand-btn"
+                draggable={false}
                 onClick={e => { e.stopPropagation(); onToggle(notebook.id); }}
               >
                 {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -145,14 +227,21 @@ function NotebookNode({
             ) : (
               <span className="expand-placeholder" />
             )}
-            <span className="notebook-dot" style={{ background: notebook.color }} />
-            <span className="nav-label">{notebook.name}</span>
-            <span className="nav-count">{count}</span>
+            <span className="nav-label" style={{ color: notebook.color }}>
+              {notebook.name}<span className="nav-count">{count}</span>
+            </span>
+            <span style={{ flex: 1 }} />
             <button
-              className="item-menu-btn"
-              onClick={e => { e.stopPropagation(); setMenuOpen(menuOpen === notebook.id ? null : notebook.id); }}
+              className="add-child-btn"
+              draggable={false}
+              title="하위 노트북 추가"
+              onClick={e => {
+                e.stopPropagation();
+                onCreateChild(notebook.id);
+                onExpand(notebook.id);
+              }}
             >
-              <MoreHorizontal size={12} />
+              <Plus size={11} />
             </button>
           </div>
         )}
@@ -160,28 +249,24 @@ function NotebookNode({
         {menuOpen === notebook.id && (
           <div className="context-menu" style={{ left: indent + 10 }}>
             <button onClick={startEdit}>
-              <Edit2 size={12} /> 이름 변경
+              <Edit2 size={12} /> 이름 변경 (F2)
             </button>
-            <button onClick={() => setColorPickerId(colorPickerId === notebook.id ? null : notebook.id)}>
-              <Palette size={12} /> 색 변경
-            </button>
-            {colorPickerId === notebook.id && (
-              <div className="context-color-picker">
-                {NOTE_COLORS.map(c => (
-                  <button
-                    key={c}
-                    className={`color-dot ${notebook.color === c ? 'selected' : ''}`}
-                    style={{ background: c }}
-                    onClick={() => {
-                      dispatch({ type: 'CHANGE_NOTEBOOK_COLOR', notebookId: notebook.id, color: c });
-                      setColorPickerId(null);
-                      setMenuOpen(null);
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-            <button onClick={() => { setAddingChildOf(notebook.id); onExpand(notebook.id); setMenuOpen(null); }}>
+            <div className="context-color-picker">
+              {NOTE_COLORS.map(c => (
+                <button
+                  key={c}
+                  className={`color-dot ${notebook.color === c ? 'selected' : ''}`}
+                  style={{ background: c }}
+                  onClick={() => {
+                    const targets = selectedNbIds.size > 0 ? [...selectedNbIds] : [notebook.id];
+                    targets.forEach(id => dispatch({ type: 'CHANGE_NOTEBOOK_COLOR', notebookId: id, color: c }));
+                    setMenuOpen(null);
+                    setSelectedNbIds(new Set());
+                  }}
+                />
+              ))}
+            </div>
+            <button onClick={() => { onCreateChild(notebook.id); onExpand(notebook.id); setMenuOpen(null); }}>
               <FolderPlus size={12} /> 하위 노트북 추가
             </button>
             {hasChildren && (
@@ -216,28 +301,23 @@ function NotebookNode({
               setMenuOpen={setMenuOpen}
               editingId={editingId}
               setEditingId={setEditingId}
-              addingChildOf={addingChildOf}
-              setAddingChildOf={setAddingChildOf}
+              editingName={editingName}
+              setEditingName={setEditingName}
               expandedIds={expandedIds}
               onToggle={onToggle}
               onExpand={onExpand}
               onExpandAll={onExpandAll}
               onCollapseAll={onCollapseAll}
-              colorPickerId={colorPickerId}
-              setColorPickerId={setColorPickerId}
+              onCreateChild={onCreateChild}
+              draggingNbRef={draggingNbRef}
+              dragOverRef={dragOverRef}
+              dropLineId={dropLineId}
+              setDropLineId={setDropLineId}
+              onReorder={onReorder}
+              selectedNbIds={selectedNbIds}
+              setSelectedNbIds={setSelectedNbIds}
             />
           ))}
-          {addingChildOf === notebook.id && (
-            <div style={{ paddingLeft: (depth + 1) * 14 + 8 }}>
-              <AddForm
-                onConfirm={(name, color) => {
-                  dispatch({ type: 'CREATE_NOTEBOOK', name, color, parentId: notebook.id });
-                  setAddingChildOf(null);
-                }}
-                onCancel={() => setAddingChildOf(null)}
-              />
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -248,17 +328,19 @@ export default function Sidebar() {
   const { state, dispatch } = useApp();
   const [notebooksOpen, setNotebooksOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
-  const [addingRootNotebook, setAddingRootNotebook] = useState(false);
   const [addingTag, setAddingTag] = useState(false);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [addingChildOf, setAddingChildOf] = useState<string | null>(null);
-  const [colorPickerId, setColorPickerId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
+  const sidebarRef = useRef<HTMLElement>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(
     () => new Set(state.notebooks.map(nb => nb.id))
   );
+  const draggingNbRef = useRef<string | null>(null);
+  const dragOverRef = useRef<{ id: string; pos: 'before' | 'after' } | null>(null);
+  const [dropLineId, setDropLineId] = useState<string | null>(null);
+  const [selectedNbIds, setSelectedNbIds] = useState<Set<string>>(new Set());
 
-  // Auto-expand newly added notebooks
   useEffect(() => {
     setExpandedIds(prev => {
       const next = new Set(prev);
@@ -267,6 +349,28 @@ export default function Sidebar() {
       return changed ? next : prev;
     });
   }, [state.notebooks]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onMouseDown(e: MouseEvent) {
+      if (!sidebarRef.current?.contains(e.target as Node)) {
+        setMenuOpen(null);
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [menuOpen]);
+
+  function getNextColor() {
+    return NOTE_COLORS[state.notebooks.length % NOTE_COLORS.length];
+  }
+
+  function createNotebook(parentId?: string) {
+    const id = generateId();
+    dispatch({ type: 'CREATE_NOTEBOOK', id, name: '새 노트북', color: getNextColor(), parentId });
+    setEditingId(id);
+    setEditingName('새 노트북');
+  }
 
   function getSubtreeIds(fromId: string): string[] {
     const result: string[] = [];
@@ -319,7 +423,7 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" ref={sidebarRef}>
       <div className="sidebar-header">
         <div className="app-logo">
           <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
@@ -373,7 +477,7 @@ export default function Sidebar() {
           )}
           <button
             className="add-btn"
-            onClick={e => { e.stopPropagation(); setAddingRootNotebook(true); }}
+            onClick={e => { e.stopPropagation(); createNotebook(); }}
             title="노트북 추가"
           >
             <Plus size={14} />
@@ -392,26 +496,25 @@ export default function Sidebar() {
                 setMenuOpen={setMenuOpen}
                 editingId={editingId}
                 setEditingId={setEditingId}
-                addingChildOf={addingChildOf}
-                setAddingChildOf={setAddingChildOf}
+                editingName={editingName}
+                setEditingName={setEditingName}
                 expandedIds={expandedIds}
                 onToggle={onToggle}
                 onExpand={onExpand}
                 onExpandAll={onExpandAll}
                 onCollapseAll={onCollapseAll}
-                colorPickerId={colorPickerId}
-                setColorPickerId={setColorPickerId}
+                onCreateChild={createNotebook}
+                draggingNbRef={draggingNbRef}
+                dragOverRef={dragOverRef}
+                dropLineId={dropLineId}
+                setDropLineId={setDropLineId}
+                onReorder={(nbId, beforeId, parentId) =>
+                  dispatch({ type: 'REORDER_NOTEBOOK', notebookId: nbId, beforeId, parentId })
+                }
+                selectedNbIds={selectedNbIds}
+                setSelectedNbIds={setSelectedNbIds}
               />
             ))}
-            {addingRootNotebook && (
-              <AddForm
-                onConfirm={(name, color) => {
-                  dispatch({ type: 'CREATE_NOTEBOOK', name, color });
-                  setAddingRootNotebook(false);
-                }}
-                onCancel={() => setAddingRootNotebook(false)}
-              />
-            )}
           </div>
         )}
       </div>

@@ -7,6 +7,10 @@ import {
   loadVersions, saveVersions,
   loadDataFromFiles,
   generateId,
+  writeNoteFile,
+  writeNoteIndex,
+  deleteNoteFile,
+  moveNoteFile,
 } from '../utils/storage';
 import { isTauriApp } from '../utils/tauri';
 
@@ -14,6 +18,7 @@ export type Action =
   | { type: 'LOAD_DATA'; notes: Note[]; notebooks: Notebook[]; tags: Tag[]; versions: NoteVersion[] }
   | { type: 'SET_VIEW'; viewMode: ViewMode; notebookId?: string; tagId?: string }
   | { type: 'SELECT_NOTE'; noteId: string | null }
+  | { type: 'SET_NOTE_CONTENT'; noteId: string; content: string }
   | { type: 'SET_SEARCH'; query: string }
   | { type: 'CREATE_NOTE' }
   | { type: 'UPDATE_NOTE'; note: Partial<Note> & { id: string } }
@@ -21,11 +26,12 @@ export type Action =
   | { type: 'TRASH_NOTE'; noteId: string }
   | { type: 'RESTORE_NOTE'; noteId: string }
   | { type: 'TOGGLE_PIN'; noteId: string }
-  | { type: 'CREATE_NOTEBOOK'; name: string; color: string; parentId?: string }
+  | { type: 'CREATE_NOTEBOOK'; name: string; color: string; parentId?: string; id?: string }
   | { type: 'RENAME_NOTEBOOK'; notebookId: string; name: string }
   | { type: 'CHANGE_NOTEBOOK_COLOR'; notebookId: string; color: string }
   | { type: 'DELETE_NOTEBOOK'; notebookId: string }
   | { type: 'MOVE_NOTEBOOK'; notebookId: string; parentId: string | undefined }
+  | { type: 'REORDER_NOTEBOOK'; notebookId: string; beforeId: string | null; parentId: string | undefined }
   | { type: 'CREATE_TAG'; name: string; color: string }
   | { type: 'DELETE_TAG'; tagId: string }
   | { type: 'TOGGLE_SIDEBAR' }
@@ -34,8 +40,10 @@ export type Action =
   | { type: 'DELETE_NOTE_VERSIONS'; noteId: string };
 
 const NOTE_COLORS = [
-  '#00A82D', '#0066CC', '#CC3300', '#FF6600',
-  '#9933CC', '#00AAAA', '#CC6600', '#006633',
+  '#EAFFD0', '#FFF799', '#FFD150', '#95E1D3',
+  '#91D06C', '#FF9760', '#f8961e', '#F38181',
+  '#f3722c', '#f94144', '#F26076', '#43aa8b',
+  '#4C8CE4', '#458B73', '#577590', '#406093',
 ];
 
 function getRandomColor(): string {
@@ -51,17 +59,39 @@ function reducer(state: AppState, action: Action): AppState {
         notebooks: action.notebooks,
         tags: action.tags,
         versions: action.versions,
+        loadedNoteIds: new Set<string>(),
       };
-    case 'SET_VIEW':
+    case 'SET_VIEW': {
+      let selectedNoteId: string | null = null;
+      if (action.viewMode === 'notebook' && action.notebookId) {
+        const collectIds = (id: string): string[] => {
+          const children = state.notebooks.filter(nb => nb.parentId === id).map(nb => nb.id);
+          return [id, ...children.flatMap(collectIds)];
+        };
+        const nbIds = new Set(collectIds(action.notebookId));
+        const latest = [...state.notes]
+          .filter(n => !n.isTrashed && nbIds.has(n.notebookId))
+          .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        selectedNoteId = latest?.id ?? null;
+      }
       return {
         ...state,
         viewMode: action.viewMode,
         selectedNotebookId: action.notebookId ?? null,
         selectedTagId: action.tagId ?? null,
-        selectedNoteId: null,
+        selectedNoteId,
       };
+    }
     case 'SELECT_NOTE':
       return { ...state, selectedNoteId: action.noteId };
+    case 'SET_NOTE_CONTENT': {
+      const notes = state.notes.map(n =>
+        n.id === action.noteId ? { ...n, content: action.content } : n
+      );
+      const loadedNoteIds = new Set(state.loadedNoteIds);
+      loadedNoteIds.add(action.noteId);
+      return { ...state, notes, loadedNoteIds };
+    }
     case 'SET_SEARCH':
       return { ...state, searchQuery: action.query };
     case 'CREATE_NOTE': {
@@ -79,15 +109,28 @@ function reducer(state: AppState, action: Action): AppState {
       };
       const notes = [newNote, ...state.notes];
       saveNotes(notes);
-      return { ...state, notes, selectedNoteId: newNote.id };
+      writeNoteFile(newNote);
+      writeNoteIndex(notes);
+      const loadedNoteIds = new Set(state.loadedNoteIds);
+      loadedNoteIds.add(newNote.id);
+      return { ...state, notes, selectedNoteId: newNote.id, loadedNoteIds };
     }
     case 'UPDATE_NOTE': {
+      const oldNote = state.notes.find(n => n.id === action.note.id);
       const notes = state.notes.map(n =>
         n.id === action.note.id
           ? { ...n, ...action.note, updatedAt: Date.now() }
           : n
       );
       saveNotes(notes);
+      const updated = notes.find(n => n.id === action.note.id);
+      if (updated) {
+        if (oldNote && action.note.notebookId && oldNote.notebookId !== action.note.notebookId) {
+          moveNoteFile(updated.id, oldNote.notebookId, updated.notebookId);
+        }
+        writeNoteFile(updated);
+        writeNoteIndex(notes);
+      }
       return { ...state, notes };
     }
     case 'TRASH_NOTE': {
@@ -95,6 +138,8 @@ function reducer(state: AppState, action: Action): AppState {
         n.id === action.noteId ? { ...n, isTrashed: true, updatedAt: Date.now() } : n
       );
       saveNotes(notes);
+      const trashed = notes.find(n => n.id === action.noteId);
+      if (trashed) { writeNoteFile(trashed); writeNoteIndex(notes); }
       const selectedNoteId = state.selectedNoteId === action.noteId ? null : state.selectedNoteId;
       return { ...state, notes, selectedNoteId };
     }
@@ -103,26 +148,35 @@ function reducer(state: AppState, action: Action): AppState {
         n.id === action.noteId ? { ...n, isTrashed: false, updatedAt: Date.now() } : n
       );
       saveNotes(notes);
+      const restored = notes.find(n => n.id === action.noteId);
+      if (restored) { writeNoteFile(restored); writeNoteIndex(notes); }
       return { ...state, notes };
     }
     case 'DELETE_NOTE': {
+      const toDelete = state.notes.find(n => n.id === action.noteId);
       const notes = state.notes.filter(n => n.id !== action.noteId);
       saveNotes(notes);
+      if (toDelete) deleteNoteFile(toDelete.id, toDelete.notebookId);
+      writeNoteIndex(notes);
+      const loadedNoteIds = new Set(state.loadedNoteIds);
+      loadedNoteIds.delete(action.noteId);
       const selectedNoteId = state.selectedNoteId === action.noteId ? null : state.selectedNoteId;
       const versionsAfterDelete = state.versions.filter(v => v.noteId !== action.noteId);
       saveVersions(versionsAfterDelete);
-      return { ...state, notes, selectedNoteId, versions: versionsAfterDelete };
+      return { ...state, notes, selectedNoteId, versions: versionsAfterDelete, loadedNoteIds };
     }
     case 'TOGGLE_PIN': {
       const notes = state.notes.map(n =>
         n.id === action.noteId ? { ...n, isPinned: !n.isPinned, updatedAt: Date.now() } : n
       );
       saveNotes(notes);
+      const pinned = notes.find(n => n.id === action.noteId);
+      if (pinned) { writeNoteFile(pinned); writeNoteIndex(notes); }
       return { ...state, notes };
     }
     case 'CREATE_NOTEBOOK': {
       const notebook: Notebook = {
-        id: generateId(),
+        id: action.id ?? generateId(),
         name: action.name,
         color: action.color || getRandomColor(),
         createdAt: Date.now(),
@@ -162,12 +216,29 @@ function reducer(state: AppState, action: Action): AppState {
       );
       saveNotebooks(notebooks);
       saveNotes(notes);
+      const reassigned = notes.filter(n => toDelete.has(state.notes.find(o => o.id === n.id)?.notebookId ?? ''));
+      reassigned.forEach(n => {
+        const oldNotebookId = state.notes.find(o => o.id === n.id)!.notebookId;
+        moveNoteFile(n.id, oldNotebookId, n.notebookId);
+        writeNoteFile(n);
+      });
+      if (reassigned.length) writeNoteIndex(notes);
       return { ...state, notebooks, notes };
     }
     case 'MOVE_NOTEBOOK': {
       const notebooks = state.notebooks.map(nb =>
         nb.id === action.notebookId ? { ...nb, parentId: action.parentId } : nb
       );
+      saveNotebooks(notebooks);
+      return { ...state, notebooks };
+    }
+    case 'REORDER_NOTEBOOK': {
+      const moving = state.notebooks.find(nb => nb.id === action.notebookId);
+      if (!moving) return state;
+      const rest = state.notebooks.filter(nb => nb.id !== action.notebookId);
+      let idx = action.beforeId ? rest.findIndex(nb => nb.id === action.beforeId) : -1;
+      if (idx === -1) idx = rest.length;
+      const notebooks = [...rest.slice(0, idx), { ...moving, parentId: action.parentId }, ...rest.slice(idx)];
       saveNotebooks(notebooks);
       return { ...state, notebooks };
     }
@@ -189,6 +260,9 @@ function reducer(state: AppState, action: Action): AppState {
       }));
       saveTags(tags);
       saveNotes(notes);
+      const tagChanged = notes.filter(n => state.notes.find(o => o.id === n.id)?.tags.includes(action.tagId));
+      tagChanged.forEach(writeNoteFile);
+      if (tagChanged.length) writeNoteIndex(notes);
       return { ...state, tags, notes };
     }
     case 'TOGGLE_SIDEBAR':
@@ -221,6 +295,8 @@ function reducer(state: AppState, action: Action): AppState {
           : n
       );
       saveNotes(notes);
+      const reverted = notes.find(n => n.id === version.noteId);
+      if (reverted) { writeNoteFile(reverted); writeNoteIndex(notes); }
       return { ...state, notes };
     }
     case 'DELETE_NOTE_VERSIONS': {
@@ -233,8 +309,10 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
+const initialNotes = loadNotes();
+
 const initialState: AppState = {
-  notes: loadNotes(),
+  notes: initialNotes,
   notebooks: loadNotebooks(),
   tags: loadTags(),
   versions: loadVersions(),
@@ -244,6 +322,8 @@ const initialState: AppState = {
   viewMode: 'all',
   searchQuery: '',
   sidebarOpen: true,
+  // In browser mode all notes are already loaded; Tauri uses lazy loading
+  loadedNoteIds: new Set(initialNotes.map(n => n.id)),
 };
 
 interface AppContextValue {
@@ -263,8 +343,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // Files exist — use them as the authoritative source
         dispatch({ type: 'LOAD_DATA', notes: data.notes, notebooks: data.notebooks, tags: data.tags, versions: data.versions });
       } else if (isTauriApp()) {
-        // First Tauri launch — write localStorage data to files now
-        saveNotes(initialState.notes);
+        // First Tauri launch — migrate localStorage data to files
+        initialState.notes.forEach(writeNoteFile);
+        writeNoteIndex(initialState.notes);
         saveNotebooks(initialState.notebooks);
         saveTags(initialState.tags);
         saveVersions(initialState.versions);

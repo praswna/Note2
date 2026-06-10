@@ -4,10 +4,11 @@ import {
   AlignLeft, AlignCenter, AlignRight,
   Pin, Trash2, Tag, ChevronDown, X, Check,
   Maximize2, Minimize2, Type, Strikethrough,
-  Highlighter, History,
+  Highlighter, History, Code,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { saveImageFile } from '../utils/imageStorage';
+import { readNoteFile } from '../utils/storage';
 import { NoteVersion } from '../types';
 
 type FormatCommand = 'bold' | 'italic' | 'underline' | 'strikethrough' | 'insertUnorderedList' | 'insertOrderedList' | 'justifyLeft' | 'justifyCenter' | 'justifyRight';
@@ -24,16 +25,32 @@ export default function Editor() {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<NoteVersion | null>(null);
+  const [overlayRect, setOverlayRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
   const editorRef = useRef<HTMLDivElement>(null);
+  const selectedImgRef = useRef<HTMLImageElement | null>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedId = useRef<string | null>(null);
   const currentNoteIdRef = useRef<string | null>(null);
   // Tracks the notebook tree path (root → leaf names) for the current note
   const notebookPathRef = useRef<string[]>([]);
 
+  // Lazy-load content when a note is selected but not yet fetched
   useEffect(() => {
     if (!note) return;
+    if (!state.loadedNoteIds.has(note.id)) {
+      // Reset guard so innerHTML will be written once content arrives
+      lastSavedId.current = null;
+      readNoteFile(note.id, note.notebookId).then(full => {
+        // Always dispatch — marks as loaded even if file missing
+        dispatch({ type: 'SET_NOTE_CONTENT', noteId: note.id, content: full?.content ?? '' });
+      });
+    }
+  }, [note?.id]);
+
+  useEffect(() => {
+    if (!note) return;
+    if (!state.loadedNoteIds.has(note.id)) return;
     if (saveTimeout.current) {
       clearTimeout(saveTimeout.current);
       saveTimeout.current = null;
@@ -46,7 +63,9 @@ export default function Editor() {
     }
     setHistoryOpen(false);
     setSelectedVersion(null);
-  }, [note?.id]);
+    selectedImgRef.current = null;
+    setOverlayRect(null);
+  }, [note?.id, state.loadedNoteIds.has(note?.id ?? '')]);
 
   // Keep notebookPathRef in sync whenever the note's notebook changes
   useEffect(() => {
@@ -139,6 +158,131 @@ export default function Editor() {
     handleEditorInput();
   }
 
+  function insertCodeBlock() {
+    const sel = window.getSelection();
+    const selectedText = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).toString() : '';
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.textContent = selectedText || '';
+    pre.appendChild(code);
+
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(pre);
+      // place cursor inside code
+      const newRange = document.createRange();
+      newRange.selectNodeContents(code);
+      newRange.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+    } else if (editorRef.current) {
+      editorRef.current.appendChild(pre);
+    }
+
+    editorRef.current?.focus();
+    handleEditorInput();
+  }
+
+  // ── Image resize ──────────────────────────────────────────────
+  function syncOverlay(img: HTMLImageElement | null) {
+    if (!img) { setOverlayRect(null); return; }
+    const r = img.getBoundingClientRect();
+    setOverlayRect({ left: r.left, top: r.top, width: r.width, height: r.height });
+  }
+
+  useEffect(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    function onScroll() { syncOverlay(selectedImgRef.current); }
+    el.addEventListener('scroll', onScroll);
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  useEffect(() => {
+    function onDocMouseDown(e: MouseEvent) {
+      const target = e.target as Element;
+      if (!target.closest?.('[data-img-overlay]') && !target.closest?.('.note-body')) {
+        selectedImgRef.current = null;
+        setOverlayRect(null);
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, []);
+
+  function handleEditorClick(e: React.MouseEvent<HTMLDivElement>) {
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'IMG' && target.classList.contains('note-image')) {
+      selectedImgRef.current = target as HTMLImageElement;
+      syncOverlay(target as HTMLImageElement);
+    } else {
+      selectedImgRef.current = null;
+      setOverlayRect(null);
+    }
+  }
+
+  function onHandleMouseDown(e: React.MouseEvent, handle: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const img = selectedImgRef.current;
+    if (!img) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startW = img.getBoundingClientRect().width;
+    const startH = img.getBoundingClientRect().height;
+    const aspect = startW / startH;
+
+    function onMouseMove(ev: MouseEvent) {
+      const img = selectedImgRef.current;
+      if (!img) return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      let newW = startW;
+      let newH = startH;
+
+      // Determine primary dimension by handle direction, then derive the other
+      if (handle === 'e' || handle === 'ne' || handle === 'se') {
+        newW = Math.max(50, startW + dx);
+        newH = newW / aspect;
+      } else if (handle === 'w' || handle === 'nw' || handle === 'sw') {
+        newW = Math.max(50, startW - dx);
+        newH = newW / aspect;
+      } else if (handle === 's') {
+        newH = Math.max(50, startH + dy);
+        newW = newH * aspect;
+      } else if (handle === 'n') {
+        newH = Math.max(50, startH - dy);
+        newW = newH * aspect;
+      }
+
+      img.style.width = `${Math.round(newW)}px`;
+      img.style.height = `${Math.round(newH)}px`;
+      syncOverlay(img);
+    }
+
+    function onMouseUp() {
+      handleEditorInput();
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    }
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }
+
+  const HANDLES = [
+    { h: 'nw', style: { left: -5, top: -5,               cursor: 'nwse-resize' } },
+    { h: 'n',  style: { left: '50%' as const, top: -5,   transform: 'translateX(-50%)', cursor: 'ns-resize' } },
+    { h: 'ne', style: { right: -5, top: -5,               cursor: 'nesw-resize' } },
+    { h: 'e',  style: { right: -5, top: '50%' as const,  transform: 'translateY(-50%)', cursor: 'ew-resize' } },
+    { h: 'se', style: { right: -5, bottom: -5,            cursor: 'nwse-resize' } },
+    { h: 's',  style: { left: '50%' as const, bottom: -5, transform: 'translateX(-50%)', cursor: 'ns-resize' } },
+    { h: 'sw', style: { left: -5, bottom: -5,             cursor: 'nesw-resize' } },
+    { h: 'w',  style: { left: -5, top: '50%' as const,   transform: 'translateY(-50%)', cursor: 'ew-resize' } },
+  ];
+  // ──────────────────────────────────────────────────────────────
+
   const insertImageDataUrl = useCallback(async (dataUrl: string) => {
     editorRef.current?.focus();
     const src = await saveImageFile(dataUrl, notebookPathRef.current);
@@ -193,7 +337,7 @@ export default function Editor() {
       <div className="editor-empty">
         <div className="editor-empty-inner">
           <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
-            <rect width="80" height="80" rx="16" fill="#f0f4f0" />
+            <rect width="80" height="80" rx="16" fill="#2a2a2a" />
             <path d="M20 24h40M20 36h32M20 48h36M20 60h24" stroke="#00A82D" strokeWidth="3" strokeLinecap="round" />
           </svg>
           <h3>노트를 선택하세요</h3>
@@ -377,6 +521,7 @@ export default function Editor() {
           <div className="toolbar-group">
             <button onClick={() => format('insertUnorderedList')} title="목록"><List size={15} /></button>
             <button onClick={() => format('insertOrderedList')} title="번호 목록"><ListOrdered size={15} /></button>
+            <button onClick={insertCodeBlock} title="코드 블럭"><Code size={15} /></button>
           </div>
           <div className="toolbar-divider" />
           <div className="toolbar-group">
@@ -407,60 +552,57 @@ export default function Editor() {
 
           return (
             <div className="history-panel">
-              <div className="history-header">
-                <button
-                  className="action-btn"
-                  onClick={() => { setHistoryOpen(false); setSelectedVersion(null); }}
-                  title="닫기"
-                >
-                  <X size={16} />
-                  <span style={{ marginLeft: 4, fontSize: 13 }}>닫기</span>
-                </button>
-                <span style={{ flex: 1, fontWeight: 600, fontSize: 14, paddingLeft: 8 }}>
-                  버전 기록 ({noteVersions.length}개)
-                </span>
-                {selectedVersion && (
+              <div className="history-list">
+                <div className="history-list-header">
+                  <span>버전 기록</span>
                   <button
-                    className="history-restore-btn"
-                    onClick={() => {
-                      dispatch({ type: 'RESTORE_VERSION', versionId: selectedVersion.id });
-                      setHistoryOpen(false);
-                      setSelectedVersion(null);
-                    }}
+                    className="action-btn"
+                    onClick={() => { setHistoryOpen(false); setSelectedVersion(null); }}
+                    title="닫기"
                   >
-                    복원
+                    <X size={14} />
                   </button>
+                </div>
+                {noteVersions.length === 0 ? (
+                  <div className="history-empty">
+                    저장된 버전 없음<br/><small>Ctrl+S로 저장</small>
+                  </div>
+                ) : (
+                  noteVersions.map(v => (
+                    <div
+                      key={v.id}
+                      className={`history-item ${selectedVersion?.id === v.id ? 'active' : ''}`}
+                      onClick={() => setSelectedVersion(v)}
+                    >
+                      {formatVersionDate(v.savedAt)}
+                    </div>
+                  ))
                 )}
               </div>
-              <div className="history-body">
-                <div className="history-list">
-                  {noteVersions.length === 0 ? (
-                    <div className="history-empty">저장된 버전이 없습니다<br/><small>Ctrl+S로 버전을 저장하세요</small></div>
-                  ) : (
-                    noteVersions.map(v => (
-                      <div
-                        key={v.id}
-                        className={`history-item ${selectedVersion?.id === v.id ? 'active' : ''}`}
-                        onClick={() => setSelectedVersion(v)}
-                      >
-                        {formatVersionDate(v.savedAt)}
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="history-preview">
-                  {selectedVersion ? (
-                    <>
+              <div className="history-preview">
+                {selectedVersion ? (
+                  <>
+                    <div className="history-preview-header">
                       <div className="history-preview-title">{selectedVersion.title}</div>
-                      <div
-                        className="note-body readonly"
-                        dangerouslySetInnerHTML={{ __html: selectedVersion.content }}
-                      />
-                    </>
-                  ) : (
-                    <div className="history-empty">버전을 클릭하면 미리 볼 수 있습니다</div>
-                  )}
-                </div>
+                      <button
+                        className="history-restore-btn"
+                        onClick={() => {
+                          dispatch({ type: 'RESTORE_VERSION', versionId: selectedVersion.id });
+                          setHistoryOpen(false);
+                          setSelectedVersion(null);
+                        }}
+                      >
+                        복원
+                      </button>
+                    </div>
+                    <div
+                      className="note-body readonly"
+                      dangerouslySetInnerHTML={{ __html: selectedVersion.content }}
+                    />
+                  </>
+                ) : (
+                  <div className="history-empty">버전을 선택하세요</div>
+                )}
               </div>
             </div>
           );
@@ -482,6 +624,7 @@ export default function Editor() {
               suppressContentEditableWarning
               onInput={handleEditorInput}
               onBlur={saveContent}
+              onClick={handleEditorClick}
               onPaste={isTrash ? undefined : handlePaste}
               onDragOver={isTrash ? undefined : handleDragOver}
               onDragLeave={isTrash ? undefined : handleDragLeave}
@@ -506,6 +649,40 @@ export default function Editor() {
         </span>
         {isTrash && <span className="trash-badge">휴지통</span>}
       </div>
+
+      {overlayRect && (
+        <div
+          data-img-overlay
+          style={{
+            position: 'fixed',
+            left: overlayRect.left,
+            top: overlayRect.top,
+            width: overlayRect.width,
+            height: overlayRect.height,
+            border: '1.5px solid #0066CC',
+            boxSizing: 'border-box',
+            pointerEvents: 'none',
+            zIndex: 9999,
+          }}
+        >
+          {HANDLES.map(({ h, style }) => (
+            <div
+              key={h}
+              style={{
+                position: 'absolute',
+                width: 10,
+                height: 10,
+                background: 'white',
+                border: '1.5px solid #0066CC',
+                borderRadius: 2,
+                pointerEvents: 'all',
+                ...style,
+              }}
+              onMouseDown={e => onHandleMouseDown(e, h)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -45,4 +45,5 @@ export interface AppState {
   viewMode: ViewMode;
   searchQuery: string;
   sidebarOpen: boolean;
+  loadedNoteIds: Set<string>;
 }
