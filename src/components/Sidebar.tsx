@@ -184,7 +184,7 @@ function NotebookNode({
               }
               if (!draggingNbRef.current || draggingNbRef.current === notebook.id) return;
               const draggingNb = allNotebooks.find(nb => nb.id === draggingNbRef.current);
-              if (draggingNb?.parentId !== notebook.parentId) return;
+              if ((draggingNb?.parentId === undefined) !== (notebook.parentId === undefined)) return;
               e.dataTransfer.dropEffect = 'move';
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
               const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
@@ -216,7 +216,7 @@ function NotebookNode({
               const nbId = draggingNbRef.current;
               if (nbId && nbId !== notebook.id) {
                 const draggingNb = allNotebooks.find(nb => nb.id === nbId);
-                if (draggingNb?.parentId === notebook.parentId) {
+                if ((draggingNb?.parentId === undefined) === (notebook.parentId === undefined)) {
                   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                   const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
                   const siblings = allNotebooks.filter(nb => nb.parentId === notebook.parentId);
