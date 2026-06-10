@@ -11,7 +11,7 @@ fn exe_dir() -> Result<std::path::PathBuf, String> {
 }
 
 fn images_dir() -> Result<std::path::PathBuf, String> {
-    Ok(exe_dir()?.join("images"))
+    Ok(exe_dir()?.join("data").join("images"))
 }
 
 fn data_dir() -> Result<std::path::PathBuf, String> {
