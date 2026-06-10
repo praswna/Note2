@@ -149,9 +149,10 @@ function NotebookNode({
             tabIndex={0}
             draggable
             onDragStart={e => {
-              e.dataTransfer.setData('text/notebook-id', notebook.id);
-              e.dataTransfer.effectAllowed = 'move';
               draggingNbRef.current = notebook.id;
+              e.dataTransfer.effectAllowed = 'move';
+              e.dataTransfer.setData('text/notebook-id', notebook.id);
+              e.dataTransfer.setData('text/plain', `nb:${notebook.id}`);
               setTimeout(() => setDraggingId(notebook.id), 0);
             }}
             onDragEnd={() => {
@@ -177,13 +178,18 @@ function NotebookNode({
             onContextMenu={e => { e.preventDefault(); setMenuOpen(menuOpen === notebook.id ? null : notebook.id); }}
             onDragOver={e => {
               e.preventDefault();
-              if (e.dataTransfer.types.includes('text/note-id')) {
+              const types = Array.from(e.dataTransfer.types);
+              // Note drag: detected via custom type or via ref absence + plain text
+              const isNoteDrag = types.includes('text/note-id') ||
+                (draggingNbRef.current === null && types.includes('text/plain'));
+              if (isNoteDrag) {
                 e.dataTransfer.dropEffect = 'move';
                 setDragOver(true);
                 return;
               }
-              if (!draggingNbRef.current || draggingNbRef.current === notebook.id) return;
-              const draggingNb = allNotebooks.find(nb => nb.id === draggingNbRef.current);
+              const draggingId = draggingNbRef.current;
+              if (!draggingId || draggingId === notebook.id) return;
+              const draggingNb = allNotebooks.find(nb => nb.id === draggingId);
               if ((draggingNb?.parentId === undefined) !== (notebook.parentId === undefined)) return;
               e.dataTransfer.dropEffect = 'move';
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -206,19 +212,38 @@ function NotebookNode({
             onDrop={e => {
               e.preventDefault();
               setDragOver(false);
-              const noteId = e.dataTransfer.getData('text/note-id');
+
+              // Resolve note ID — custom MIME type first, then text/plain fallback
+              let noteId = e.dataTransfer.getData('text/note-id');
+              if (!noteId) {
+                const plain = e.dataTransfer.getData('text/plain');
+                if (plain.startsWith('nt:')) noteId = plain.slice(3);
+              }
               if (noteId) {
                 dispatch({ type: 'UPDATE_NOTE', note: { id: noteId, notebookId: notebook.id } });
                 dragOverRef.current = null;
                 setDropLineId(null);
                 return;
               }
-              const nbId = draggingNbRef.current;
+
+              // Resolve notebook ID — ref first, then getData fallback
+              let nbId = draggingNbRef.current;
+              if (!nbId) {
+                const fromData = e.dataTransfer.getData('text/notebook-id');
+                if (fromData) {
+                  nbId = fromData;
+                } else {
+                  const plain = e.dataTransfer.getData('text/plain');
+                  if (plain.startsWith('nb:')) nbId = plain.slice(3);
+                }
+              }
+
               if (nbId && nbId !== notebook.id) {
                 const draggingNb = allNotebooks.find(nb => nb.id === nbId);
                 if ((draggingNb?.parentId === undefined) === (notebook.parentId === undefined)) {
+                  const savedPos = dragOverRef.current?.id === notebook.id ? dragOverRef.current.pos : null;
                   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                  const pos = savedPos ?? (e.clientY < rect.top + rect.height / 2 ? 'before' : 'after');
                   const siblings = allNotebooks.filter(nb => nb.parentId === notebook.parentId);
                   const afterSibling = siblings.find((_, i, arr) => arr[i - 1]?.id === notebook.id)?.id ?? null;
                   onReorder(nbId, pos === 'before' ? notebook.id : afterSibling, notebook.parentId);

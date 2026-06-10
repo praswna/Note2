@@ -40,8 +40,9 @@ function NoteCard({ note, state, dispatch, isMultiSelected, onCardClick }: NoteC
       className={`note-card ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''}`}
       draggable
       onDragStart={e => {
-        e.dataTransfer.setData('text/note-id', note.id);
         e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/note-id', note.id);
+        e.dataTransfer.setData('text/plain', `nt:${note.id}`);
       }}
       onClick={e => onCardClick(note, e)}
     >
