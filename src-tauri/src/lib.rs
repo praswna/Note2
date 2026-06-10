@@ -1,28 +1,22 @@
 use std::fs;
-use tauri::Manager;
+
+fn images_dir() -> Result<std::path::PathBuf, String> {
+    let dir = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .parent()
+        .ok_or_else(|| "Cannot determine executable directory".to_string())?
+        .join("images");
+    Ok(dir)
+}
 
 #[tauri::command]
-fn save_image(
-    app: tauri::AppHandle,
-    id: String,
-    data: Vec<u8>,
-    ext: String,
-    subdir: Vec<String>,
-) -> Result<String, String> {
-    // Validate each path component to prevent directory traversal
+fn save_image(id: String, data: Vec<u8>, ext: String, subdir: Vec<String>) -> Result<String, String> {
     for part in &subdir {
         if part.is_empty() || part.contains("..") || part.starts_with('/') || part.starts_with('\\') {
             return Err(format!("Invalid directory component: {}", part));
         }
     }
-
-    let base = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("images");
-
-    let dir = subdir.iter().fold(base, |acc, part| acc.join(part));
+    let dir = subdir.iter().fold(images_dir()?, |acc, part| acc.join(part));
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{}.{}", id, ext));
     fs::write(&path, &data).map_err(|e| e.to_string())?;
@@ -30,14 +24,9 @@ fn save_image(
 }
 
 #[tauri::command]
-fn delete_image(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let images_dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("images");
+fn delete_image(path: String) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
-    if !p.starts_with(&images_dir) {
+    if !p.starts_with(images_dir()?) {
         return Err("Access denied: path is outside images directory".into());
     }
     if p.exists() {
