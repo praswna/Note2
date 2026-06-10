@@ -209,8 +209,13 @@ function reducer(state: AppState, action: Action): AppState {
       };
       collect(action.notebookId);
 
-      const notebooks = state.notebooks.filter(nb => !toDelete.has(nb.id));
-      const fallbackId = notebooks[0]?.id ?? 'default';
+      let notebooks = state.notebooks.filter(nb => !toDelete.has(nb.id));
+      // Ensure at least one notebook always exists
+      if (notebooks.length === 0) {
+        const def: Notebook = { id: 'default', name: '내 노트북', color: '#4C8CE4', createdAt: Date.now() };
+        notebooks = [def];
+      }
+      const fallbackId = notebooks[0].id;
       const notes = state.notes.map(n =>
         toDelete.has(n.notebookId) ? { ...n, notebookId: fallbackId } : n
       );
@@ -235,6 +240,8 @@ function reducer(state: AppState, action: Action): AppState {
     case 'REORDER_NOTEBOOK': {
       const moving = state.notebooks.find(nb => nb.id === action.notebookId);
       if (!moving) return state;
+      // Inserting before itself is a no-op (happens when item is already right before the target)
+      if (action.beforeId === action.notebookId) return state;
       const rest = state.notebooks.filter(nb => nb.id !== action.notebookId);
       let idx = action.beforeId ? rest.findIndex(nb => nb.id === action.beforeId) : -1;
       if (idx === -1) idx = rest.length;

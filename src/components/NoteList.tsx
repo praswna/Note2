@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useRef } from 'react';
+import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { Search, Plus, Pin, Tag, Trash2, RotateCcw, X, FolderOpen } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Note, AppState } from '../types';
@@ -96,6 +96,12 @@ export default function NoteList() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [moveOpen, setMoveOpen] = useState(false);
   const lastClickedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setMoveOpen(false);
+    lastClickedRef.current = null;
+  }, [state.viewMode, state.selectedNotebookId, state.selectedTagId]);
 
   const filteredNotes = useMemo(() => {
     let notes = state.notes;
