@@ -386,7 +386,10 @@ export default function Sidebar() {
 
   function createNotebook(parentId?: string) {
     const id = generateId();
-    dispatch({ type: 'CREATE_NOTEBOOK', id, name: '새 노트북', color: getNextColor(), parentId });
+    const color = parentId
+      ? (state.notebooks.find(nb => nb.id === parentId)?.color ?? getNextColor())
+      : getNextColor();
+    dispatch({ type: 'CREATE_NOTEBOOK', id, name: '새 노트북', color, parentId });
     setEditingId(id);
     setEditingName('새 노트북');
   }
