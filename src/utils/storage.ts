@@ -33,7 +33,14 @@ export function loadNotebooks(): Notebook[] {
     }
     return stored;
   } catch {
-    return [];
+    const defaultNotebook: Notebook = {
+      id: 'default',
+      name: '내 노트북',
+      color: '#00A82D',
+      createdAt: Date.now(),
+    };
+    saveNotebooks([defaultNotebook]);
+    return [defaultNotebook];
   }
 }
 

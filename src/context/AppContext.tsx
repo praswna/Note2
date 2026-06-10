@@ -7,7 +7,7 @@ import {
   generateId,
 } from '../utils/storage';
 
-type Action =
+export type Action =
   | { type: 'SET_VIEW'; viewMode: ViewMode; notebookId?: string; tagId?: string }
   | { type: 'SELECT_NOTE'; noteId: string | null }
   | { type: 'SET_SEARCH'; query: string }

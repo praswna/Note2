@@ -23,9 +23,17 @@ export default function Editor() {
   const editorRef = useRef<HTMLDivElement>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedId = useRef<string | null>(null);
+  // Ref so saveContent always uses the current note id, not a stale closure value
+  const currentNoteIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!note) return;
+    // Cancel any pending save from the previous note before overwriting innerHTML
+    if (saveTimeout.current) {
+      clearTimeout(saveTimeout.current);
+      saveTimeout.current = null;
+    }
+    currentNoteIdRef.current = note.id;
     setTitle(note.title === '제목 없음' ? '' : note.title);
     if (editorRef.current && lastSavedId.current !== note.id) {
       editorRef.current.innerHTML = note.content;
@@ -33,14 +41,25 @@ export default function Editor() {
     }
   }, [note?.id]);
 
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.notebook-selector')) setNotebookDropdownOpen(false);
+      if (!target.closest('.tag-add-wrapper')) setTagDropdownOpen(false);
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const saveContent = useCallback(() => {
-    if (!note || !editorRef.current) return;
+    if (!currentNoteIdRef.current || !editorRef.current) return;
     const content = editorRef.current.innerHTML;
     dispatch({
       type: 'UPDATE_NOTE',
-      note: { id: note.id, content },
+      note: { id: currentNoteIdRef.current, content },
     });
-  }, [note, dispatch]);
+  }, [dispatch]);
 
   const handleTitleChange = (value: string) => {
     setTitle(value);
@@ -66,12 +85,16 @@ export default function Editor() {
   }
 
   function formatFontSize(size: string) {
+    // Mark pre-existing font[size="7"] so we only restyle newly inserted ones
+    const existing = editorRef.current?.querySelectorAll('font[size="7"]');
+    existing?.forEach(el => el.setAttribute('data-pre', '1'));
     document.execCommand('fontSize', false, '7');
-    const fontElements = editorRef.current?.querySelectorAll('font[size="7"]');
-    fontElements?.forEach(el => {
+    const newElements = editorRef.current?.querySelectorAll('font[size="7"]:not([data-pre])');
+    newElements?.forEach(el => {
       (el as HTMLElement).removeAttribute('size');
       (el as HTMLElement).style.fontSize = `${size}px`;
     });
+    existing?.forEach(el => el.removeAttribute('data-pre'));
     setFontSize(size);
     editorRef.current?.focus();
     handleEditorInput();
