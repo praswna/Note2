@@ -120,6 +120,8 @@ input {
   transition: background 0.15s;
   text-align: left;
   position: relative;
+  cursor: pointer;
+  user-select: none;
 }
 
 .nav-item:hover { background: var(--color-sidebar-hover); }

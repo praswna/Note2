@@ -118,10 +118,13 @@ function NotebookNode({
             <button onClick={() => setEditingId(null)}><X size={12} /></button>
           </div>
         ) : (
-          <button
+          <div
             className={`nav-item ${isActive ? 'active' : ''}`}
             style={{ paddingLeft: indent + 10 }}
+            role="button"
+            tabIndex={0}
             onClick={() => dispatch({ type: 'SET_VIEW', viewMode: 'notebook', notebookId: notebook.id })}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') dispatch({ type: 'SET_VIEW', viewMode: 'notebook', notebookId: notebook.id }); }}
           >
             {hasChildren || addingChildOf === notebook.id ? (
               <button
@@ -142,7 +145,7 @@ function NotebookNode({
             >
               <MoreHorizontal size={12} />
             </button>
-          </button>
+          </div>
         )}
 
         {menuOpen === notebook.id && (
