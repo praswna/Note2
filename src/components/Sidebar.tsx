@@ -176,6 +176,9 @@ function NotebookNode({
               if (e.key === 'F2') startEdit();
             }}
             onContextMenu={e => { e.preventDefault(); setMenuOpen(menuOpen === notebook.id ? null : notebook.id); }}
+            onDragEnter={e => {
+              e.preventDefault();
+            }}
             onDragOver={e => {
               e.preventDefault();
               const types = Array.from(e.dataTransfer.types);
@@ -190,7 +193,7 @@ function NotebookNode({
               const draggingId = draggingNbRef.current;
               if (!draggingId || draggingId === notebook.id) return;
               const draggingNb = allNotebooks.find(nb => nb.id === draggingId);
-              if ((draggingNb?.parentId === undefined) !== (notebook.parentId === undefined)) return;
+              if (!!draggingNb?.parentId !== !!notebook.parentId) return;
               e.dataTransfer.dropEffect = 'move';
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
               const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
@@ -240,7 +243,7 @@ function NotebookNode({
 
               if (nbId && nbId !== notebook.id) {
                 const draggingNb = allNotebooks.find(nb => nb.id === nbId);
-                if ((draggingNb?.parentId === undefined) === (notebook.parentId === undefined)) {
+                if (!!draggingNb?.parentId === !!notebook.parentId) {
                   const savedPos = dragOverRef.current?.id === notebook.id ? dragOverRef.current.pos : null;
                   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                   const pos = savedPos ?? (e.clientY < rect.top + rect.height / 2 ? 'before' : 'after');
