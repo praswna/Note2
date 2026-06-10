@@ -19,6 +19,7 @@ export default function Editor() {
   const [notebookDropdownOpen, setNotebookDropdownOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [fontSize, setFontSize] = useState('16');
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   const editorRef = useRef<HTMLDivElement>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,10 +74,10 @@ export default function Editor() {
     }, 500);
   };
 
-  const handleEditorInput = () => {
+  const handleEditorInput = useCallback(() => {
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(saveContent, 800);
-  };
+  }, [saveContent]);
 
   function format(cmd: FormatCommand) {
     document.execCommand(cmd, false);
@@ -105,6 +106,58 @@ export default function Editor() {
     editorRef.current?.focus();
     handleEditorInput();
   }
+
+  function insertImageDataUrl(dataUrl: string) {
+    editorRef.current?.focus();
+    document.execCommand(
+      'insertHTML', false,
+      `<img src="${dataUrl}" class="note-image" />`
+    );
+    handleEditorInput();
+  }
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    const imageItem = Array.from(e.clipboardData.items).find(item => item.type.startsWith('image/'));
+    if (!imageItem) return;
+    e.preventDefault();
+    const file = imageItem.getAsFile();
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => insertImageDataUrl(reader.result as string);
+    reader.readAsDataURL(file);
+  }, [handleEditorInput]);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault();
+      setIsDraggingOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!editorRef.current?.contains(e.relatedTarget as Node)) {
+      setIsDraggingOver(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+    // Position caret at drop point
+    const range = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+    if (range) {
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => insertImageDataUrl(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+  }, [handleEditorInput]);
 
   if (!note) {
     return (
@@ -304,15 +357,26 @@ export default function Editor() {
           onChange={e => handleTitleChange(e.target.value)}
           disabled={isTrash}
         />
-        <div
-          ref={editorRef}
-          className={`note-body ${isTrash ? 'readonly' : ''}`}
-          contentEditable={!isTrash}
-          suppressContentEditableWarning
-          onInput={handleEditorInput}
-          onBlur={saveContent}
-          data-placeholder="여기에 노트를 작성하세요..."
-        />
+        <div className="note-body-wrapper">
+          <div
+            ref={editorRef}
+            className={`note-body ${isTrash ? 'readonly' : ''}`}
+            contentEditable={!isTrash}
+            suppressContentEditableWarning
+            onInput={handleEditorInput}
+            onBlur={saveContent}
+            onPaste={isTrash ? undefined : handlePaste}
+            onDragOver={isTrash ? undefined : handleDragOver}
+            onDragLeave={isTrash ? undefined : handleDragLeave}
+            onDrop={isTrash ? undefined : handleDrop}
+            data-placeholder="여기에 노트를 작성하세요..."
+          />
+          {isDraggingOver && (
+            <div className="drag-overlay">
+              <div className="drag-overlay-inner">이미지를 여기에 놓으세요</div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="editor-footer">

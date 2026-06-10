@@ -820,6 +820,14 @@ input {
 
 .note-title-input::placeholder { color: #c8c8c8; }
 
+.note-body-wrapper {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .note-body {
   flex: 1;
   overflow-y: auto;
@@ -828,6 +836,38 @@ input {
   color: var(--color-text);
   outline: none;
   min-height: 200px;
+}
+
+.note-body img.note-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 6px 0;
+  display: block;
+  cursor: default;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+}
+
+.drag-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 168, 45, 0.08);
+  border: 2px dashed var(--color-accent);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.drag-overlay-inner {
+  background: var(--color-accent);
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .note-body::-webkit-scrollbar { width: 5px; }
