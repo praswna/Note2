@@ -264,6 +264,14 @@ input {
 .context-menu button.danger { color: #f87171; }
 .context-menu button.danger:hover { background: rgba(248,113,113,0.1); }
 
+.context-color-picker {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
 .inline-edit {
   display: flex;
   align-items: center;

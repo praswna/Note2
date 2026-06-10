@@ -19,6 +19,7 @@ export type Action =
   | { type: 'TOGGLE_PIN'; noteId: string }
   | { type: 'CREATE_NOTEBOOK'; name: string; color: string; parentId?: string }
   | { type: 'RENAME_NOTEBOOK'; notebookId: string; name: string }
+  | { type: 'CHANGE_NOTEBOOK_COLOR'; notebookId: string; color: string }
   | { type: 'DELETE_NOTEBOOK'; notebookId: string }
   | { type: 'MOVE_NOTEBOOK'; notebookId: string; parentId: string | undefined }
   | { type: 'CREATE_TAG'; name: string; color: string }
@@ -117,6 +118,13 @@ function reducer(state: AppState, action: Action): AppState {
     case 'RENAME_NOTEBOOK': {
       const notebooks = state.notebooks.map(nb =>
         nb.id === action.notebookId ? { ...nb, name: action.name } : nb
+      );
+      saveNotebooks(notebooks);
+      return { ...state, notebooks };
+    }
+    case 'CHANGE_NOTEBOOK_COLOR': {
+      const notebooks = state.notebooks.map(nb =>
+        nb.id === action.notebookId ? { ...nb, color: action.color } : nb
       );
       saveNotebooks(notebooks);
       return { ...state, notebooks };

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   BookOpen, Tag, Pin, Trash2, ChevronDown, ChevronRight,
   Plus, MoreHorizontal, Edit2, X, Check, FolderPlus,
-  ChevronsDownUp, ChevronsUpDown,
+  ChevronsDownUp, ChevronsUpDown, Palette,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Notebook } from '../types';
@@ -66,6 +66,8 @@ interface NotebookNodeProps {
   onExpand: (id: string) => void;
   onExpandAll: (fromId: string) => void;
   onCollapseAll: (fromId: string) => void;
+  colorPickerId: string | null;
+  setColorPickerId: (id: string | null) => void;
 }
 
 function NotebookNode({
@@ -74,6 +76,7 @@ function NotebookNode({
   editingId, setEditingId,
   addingChildOf, setAddingChildOf,
   expandedIds, onToggle, onExpand, onExpandAll, onCollapseAll,
+  colorPickerId, setColorPickerId,
 }: NotebookNodeProps) {
   const { state, dispatch } = useApp();
   const [editingName, setEditingName] = useState('');
@@ -159,6 +162,25 @@ function NotebookNode({
             <button onClick={startEdit}>
               <Edit2 size={12} /> 이름 변경
             </button>
+            <button onClick={() => setColorPickerId(colorPickerId === notebook.id ? null : notebook.id)}>
+              <Palette size={12} /> 색 변경
+            </button>
+            {colorPickerId === notebook.id && (
+              <div className="context-color-picker">
+                {NOTE_COLORS.map(c => (
+                  <button
+                    key={c}
+                    className={`color-dot ${notebook.color === c ? 'selected' : ''}`}
+                    style={{ background: c }}
+                    onClick={() => {
+                      dispatch({ type: 'CHANGE_NOTEBOOK_COLOR', notebookId: notebook.id, color: c });
+                      setColorPickerId(null);
+                      setMenuOpen(null);
+                    }}
+                  />
+                ))}
+              </div>
+            )}
             <button onClick={() => { setAddingChildOf(notebook.id); onExpand(notebook.id); setMenuOpen(null); }}>
               <FolderPlus size={12} /> 하위 노트북 추가
             </button>
@@ -201,6 +223,8 @@ function NotebookNode({
               onExpand={onExpand}
               onExpandAll={onExpandAll}
               onCollapseAll={onCollapseAll}
+              colorPickerId={colorPickerId}
+              setColorPickerId={setColorPickerId}
             />
           ))}
           {addingChildOf === notebook.id && (
@@ -229,6 +253,7 @@ export default function Sidebar() {
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [addingChildOf, setAddingChildOf] = useState<string | null>(null);
+  const [colorPickerId, setColorPickerId] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(
     () => new Set(state.notebooks.map(nb => nb.id))
   );
@@ -374,6 +399,8 @@ export default function Sidebar() {
                 onExpand={onExpand}
                 onExpandAll={onExpandAll}
                 onCollapseAll={onCollapseAll}
+                colorPickerId={colorPickerId}
+                setColorPickerId={setColorPickerId}
               />
             ))}
             {addingRootNotebook && (
