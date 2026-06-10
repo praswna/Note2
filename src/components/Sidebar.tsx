@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   BookOpen, Tag, Pin, Trash2, ChevronDown, ChevronRight,
   Plus, MoreHorizontal, Edit2, X, Check, FolderPlus,
+  ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Notebook } from '../types';
@@ -60,6 +61,11 @@ interface NotebookNodeProps {
   setEditingId: (id: string | null) => void;
   addingChildOf: string | null;
   setAddingChildOf: (id: string | null) => void;
+  expandedIds: Set<string>;
+  onToggle: (id: string) => void;
+  onExpand: (id: string) => void;
+  onExpandAll: (fromId: string) => void;
+  onCollapseAll: (fromId: string) => void;
 }
 
 function NotebookNode({
@@ -67,15 +73,15 @@ function NotebookNode({
   menuOpen, setMenuOpen,
   editingId, setEditingId,
   addingChildOf, setAddingChildOf,
+  expandedIds, onToggle, onExpand, onExpandAll, onCollapseAll,
 }: NotebookNodeProps) {
   const { state, dispatch } = useApp();
-  const [expanded, setExpanded] = useState(true);
   const [editingName, setEditingName] = useState('');
 
+  const expanded = expandedIds.has(notebook.id);
   const children = allNotebooks.filter(nb => nb.parentId === notebook.id);
   const hasChildren = children.length > 0;
 
-  // Count notes in this notebook AND all descendants
   const collectIds = (id: string): string[] => {
     const kids = allNotebooks.filter(nb => nb.parentId === id).map(nb => nb.id);
     return [id, ...kids.flatMap(collectIds)];
@@ -129,7 +135,7 @@ function NotebookNode({
             {hasChildren || addingChildOf === notebook.id ? (
               <button
                 className="expand-btn"
-                onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}
+                onClick={e => { e.stopPropagation(); onToggle(notebook.id); }}
               >
                 {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
               </button>
@@ -153,9 +159,19 @@ function NotebookNode({
             <button onClick={startEdit}>
               <Edit2 size={12} /> 이름 변경
             </button>
-            <button onClick={() => { setAddingChildOf(notebook.id); setExpanded(true); setMenuOpen(null); }}>
+            <button onClick={() => { setAddingChildOf(notebook.id); onExpand(notebook.id); setMenuOpen(null); }}>
               <FolderPlus size={12} /> 하위 노트북 추가
             </button>
+            {hasChildren && (
+              <>
+                <button onClick={() => { onExpandAll(notebook.id); setMenuOpen(null); }}>
+                  <ChevronsUpDown size={12} /> 모두 열기
+                </button>
+                <button onClick={() => { onCollapseAll(notebook.id); setMenuOpen(null); }}>
+                  <ChevronsDownUp size={12} /> 모두 닫기
+                </button>
+              </>
+            )}
             <button
               className="danger"
               onClick={() => { dispatch({ type: 'DELETE_NOTEBOOK', notebookId: notebook.id }); setMenuOpen(null); }}
@@ -180,6 +196,11 @@ function NotebookNode({
               setEditingId={setEditingId}
               addingChildOf={addingChildOf}
               setAddingChildOf={setAddingChildOf}
+              expandedIds={expandedIds}
+              onToggle={onToggle}
+              onExpand={onExpand}
+              onExpandAll={onExpandAll}
+              onCollapseAll={onCollapseAll}
             />
           ))}
           {addingChildOf === notebook.id && (
@@ -208,11 +229,63 @@ export default function Sidebar() {
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [addingChildOf, setAddingChildOf] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(
+    () => new Set(state.notebooks.map(nb => nb.id))
+  );
+
+  // Auto-expand newly added notebooks
+  useEffect(() => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      let changed = false;
+      state.notebooks.forEach(nb => { if (!prev.has(nb.id)) { next.add(nb.id); changed = true; } });
+      return changed ? next : prev;
+    });
+  }, [state.notebooks]);
+
+  function getSubtreeIds(fromId: string): string[] {
+    const result: string[] = [];
+    const collect = (id: string) => {
+      result.push(id);
+      state.notebooks.filter(nb => nb.parentId === id).forEach(c => collect(c.id));
+    };
+    collect(fromId);
+    return result;
+  }
+
+  function onToggle(id: string) {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function onExpand(id: string) {
+    setExpandedIds(prev => prev.has(id) ? prev : new Set([...prev, id]));
+  }
+
+  function onExpandAll(fromId: string) {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      getSubtreeIds(fromId).forEach(id => next.add(id));
+      return next;
+    });
+  }
+
+  function onCollapseAll(fromId: string) {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      getSubtreeIds(fromId).forEach(id => next.delete(id));
+      return next;
+    });
+  }
 
   const rootNotebooks = state.notebooks.filter(nb => !nb.parentId);
   const allCount = state.notes.filter(n => !n.isTrashed).length;
   const pinnedCount = state.notes.filter(n => n.isPinned && !n.isTrashed).length;
   const trashCount = state.notes.filter(n => n.isTrashed).length;
+  const hasAnyNotebook = state.notebooks.length > 0;
 
   const isActive = (viewMode: string, id?: string) => {
     if (viewMode === 'notebook') return state.viewMode === 'notebook' && state.selectedNotebookId === id;
@@ -255,6 +328,24 @@ export default function Sidebar() {
         <button className="section-header" onClick={() => setNotebooksOpen(o => !o)}>
           {notebooksOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <span>노트북</span>
+          {notebooksOpen && hasAnyNotebook && (
+            <>
+              <button
+                className="add-btn"
+                title="모두 열기"
+                onClick={e => { e.stopPropagation(); rootNotebooks.forEach(nb => onExpandAll(nb.id)); }}
+              >
+                <ChevronsUpDown size={13} />
+              </button>
+              <button
+                className="add-btn"
+                title="모두 닫기"
+                onClick={e => { e.stopPropagation(); rootNotebooks.forEach(nb => onCollapseAll(nb.id)); }}
+              >
+                <ChevronsDownUp size={13} />
+              </button>
+            </>
+          )}
           <button
             className="add-btn"
             onClick={e => { e.stopPropagation(); setAddingRootNotebook(true); }}
@@ -278,6 +369,11 @@ export default function Sidebar() {
                 setEditingId={setEditingId}
                 addingChildOf={addingChildOf}
                 setAddingChildOf={setAddingChildOf}
+                expandedIds={expandedIds}
+                onToggle={onToggle}
+                onExpand={onExpand}
+                onExpandAll={onExpandAll}
+                onCollapseAll={onCollapseAll}
               />
             ))}
             {addingRootNotebook && (
