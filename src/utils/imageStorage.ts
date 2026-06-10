@@ -5,12 +5,37 @@ function sanitizeDirName(name: string): string {
   return name.replace(/[/\\:*?"<>|]/g, '_').trim() || '_';
 }
 
+const MAX_WIDTH = 1920;
+const JPEG_QUALITY = 0.85;
+
+function compressToJpeg(dataUrl: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = img.naturalWidth > MAX_WIDTH ? MAX_WIDTH / img.naturalWidth : 1;
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#ffffff'; // flatten transparency
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', JPEG_QUALITY));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
 export async function saveImageFile(dataUrl: string, notebookPath: string[]): Promise<string> {
   if (!isTauriApp()) throw new Error('Image storage requires Tauri desktop app');
 
-  const match = dataUrl.match(/^data:image\/(\w+);base64,/);
-  if (!match) throw new Error('Invalid image data URL');
-  const ext = match[1] === 'jpeg' ? 'jpg' : match[1];
+  dataUrl = await compressToJpeg(dataUrl);
+
+  if (!dataUrl.startsWith('data:image/')) throw new Error('Invalid image data URL');
+  const ext = 'jpg'; // always JPEG after compression
 
   const subdir = notebookPath.map(sanitizeDirName);
 
