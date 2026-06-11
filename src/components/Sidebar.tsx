@@ -193,8 +193,26 @@ function NotebookNode({
               const draggingId = draggingNbRef.current;
               if (!draggingId || draggingId === notebook.id) return;
               const draggingNb = allNotebooks.find(nb => nb.id === draggingId);
-              if (!!draggingNb?.parentId !== !!notebook.parentId) return;
+
+              // Prevent cycle: block if drop target is inside the dragged node's subtree
+              let anc: string | undefined = notebook.parentId;
+              while (anc) {
+                if (anc === draggingId) return;
+                anc = allNotebooks.find(nb => nb.id === anc)?.parentId;
+              }
+
+              // Block root→non-root (making a root a child of another node's parent group)
+              if (!draggingNb?.parentId && notebook.parentId) return;
+
               e.dataTransfer.dropEffect = 'move';
+
+              // Child dragged onto a root → "drop into" highlight, no reorder line
+              if (draggingNb?.parentId && !notebook.parentId) {
+                setDragOver(true);
+                return;
+              }
+
+              // Same-level reorder
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
               const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
               const newId = `${notebook.id}:${pos}`;
@@ -243,13 +261,34 @@ function NotebookNode({
 
               if (nbId && nbId !== notebook.id) {
                 const draggingNb = allNotebooks.find(nb => nb.id === nbId);
-                if (!!draggingNb?.parentId === !!notebook.parentId) {
-                  const savedPos = dragOverRef.current?.id === notebook.id ? dragOverRef.current.pos : null;
-                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  const pos = savedPos ?? (e.clientY < rect.top + rect.height / 2 ? 'before' : 'after');
-                  const siblings = allNotebooks.filter(nb => nb.parentId === notebook.parentId);
-                  const afterSibling = siblings.find((_, i, arr) => arr[i - 1]?.id === notebook.id)?.id ?? null;
-                  onReorder(nbId, pos === 'before' ? notebook.id : afterSibling, notebook.parentId);
+
+                // Cycle guard: abort if drop target is inside the dragged node's subtree
+                let anc: string | undefined = notebook.parentId;
+                let isCycle = false;
+                while (anc) {
+                  if (anc === nbId) { isCycle = true; break; }
+                  anc = allNotebooks.find(nb => nb.id === anc)?.parentId;
+                }
+
+                const isRootOnChild = !draggingNb?.parentId && !!notebook.parentId;
+
+                if (!isCycle && !isRootOnChild) {
+                  const isChildOnRoot = !!draggingNb?.parentId && !notebook.parentId;
+                  if (isChildOnRoot) {
+                    // Reparent child under this root notebook
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                    const rootChildren = allNotebooks.filter(nb => nb.parentId === notebook.id);
+                    const beforeId = pos === 'before' ? (rootChildren[0]?.id ?? null) : null;
+                    onReorder(nbId, beforeId, notebook.id);
+                  } else {
+                    const savedPos = dragOverRef.current?.id === notebook.id ? dragOverRef.current.pos : null;
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const pos = savedPos ?? (e.clientY < rect.top + rect.height / 2 ? 'before' : 'after');
+                    const siblings = allNotebooks.filter(nb => nb.parentId === notebook.parentId);
+                    const afterSibling = siblings.find((_, i, arr) => arr[i - 1]?.id === notebook.id)?.id ?? null;
+                    onReorder(nbId, pos === 'before' ? notebook.id : afterSibling, notebook.parentId);
+                  }
                 }
               }
               draggingNbRef.current = null;
