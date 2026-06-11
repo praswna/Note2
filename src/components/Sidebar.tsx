@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import {
   BookOpen, Tag, Pin, Trash2, ChevronDown, ChevronRight,
   Plus, Edit2, X, Check, FolderPlus,
   ChevronsDownUp, ChevronsUpDown, GripVertical,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, type Action } from '../context/AppContext';
 import { Notebook } from '../types';
 import { generateId } from '../utils/storage';
 
@@ -54,9 +54,25 @@ function AddForm({ onConfirm, onCancel, placeholder = '태그 이름...' }: AddF
   );
 }
 
+function isDescendant(nodeId: string, ancestorId: string, notebooks: Notebook[]): boolean {
+  const visited = new Set<string>();
+  let cur: string | undefined = nodeId;
+  while (cur) {
+    if (visited.has(cur)) break;
+    visited.add(cur);
+    if (cur === ancestorId) return true;
+    cur = notebooks.find(nb => nb.id === cur)?.parentId;
+  }
+  return false;
+}
+
 interface NotebookNodeProps {
   notebook: Notebook;
   allNotebooks: Notebook[];
+  childrenMap: Map<string | undefined, Notebook[]>;
+  notebookCountMap: Map<string, number>;
+  activeNotebookId: string | null;
+  dispatch: React.Dispatch<Action>;
   depth: number;
   menuOpen: string | null;
   setMenuOpen: (id: string | null) => void;
@@ -81,31 +97,20 @@ interface NotebookNodeProps {
   setDraggingId: (id: string | null) => void;
 }
 
-function NotebookNode({
-  notebook, allNotebooks, depth,
-  menuOpen, setMenuOpen,
-  editingId, setEditingId, editingName, setEditingName,
-  expandedIds, onToggle, onExpand, onExpandAll, onCollapseAll,
-  onCreateChild,
+const NotebookNode = memo(function NotebookNode({
+  notebook, allNotebooks, childrenMap, notebookCountMap, activeNotebookId, dispatch,
+  depth, menuOpen, setMenuOpen, editingId, setEditingId, editingName, setEditingName,
+  expandedIds, onToggle, onExpand, onExpandAll, onCollapseAll, onCreateChild,
   draggingNbRef, dragOverRef, dropLineId, setDropLineId, onReorder,
-  selectedNbIds, setSelectedNbIds,
-  draggingId, setDraggingId,
+  selectedNbIds, setSelectedNbIds, draggingId, setDraggingId,
 }: NotebookNodeProps) {
-  const { state, dispatch } = useApp();
   const [dragOver, setDragOver] = useState(false);
 
   const expanded = expandedIds.has(notebook.id);
-  const children = allNotebooks.filter(nb => nb.parentId === notebook.id);
+  const children = childrenMap.get(notebook.id) ?? [];
   const hasChildren = children.length > 0;
-
-  const collectIds = (id: string): string[] => {
-    const kids = allNotebooks.filter(nb => nb.parentId === id).map(nb => nb.id);
-    return [id, ...kids.flatMap(collectIds)];
-  };
-  const allIds = collectIds(notebook.id);
-  const count = state.notes.filter(n => allIds.includes(n.notebookId) && !n.isTrashed).length;
-
-  const isActive = state.viewMode === 'notebook' && state.selectedNotebookId === notebook.id;
+  const count = notebookCountMap.get(notebook.id) ?? 0;
+  const isActive = activeNotebookId === notebook.id;
 
   function startEdit() {
     setEditingName(notebook.name);
@@ -153,7 +158,7 @@ function NotebookNode({
               e.dataTransfer.effectAllowed = 'move';
               e.dataTransfer.setData('text/notebook-id', notebook.id);
               e.dataTransfer.setData('text/plain', `nb:${notebook.id}`);
-              setTimeout(() => setDraggingId(notebook.id), 0);
+              setTimeout(() => { if (draggingNbRef.current === notebook.id) setDraggingId(notebook.id); }, 0);
             }}
             onDragEnd={() => {
               draggingNbRef.current = null;
@@ -176,15 +181,11 @@ function NotebookNode({
               if (e.key === 'F2') startEdit();
             }}
             onContextMenu={e => { e.preventDefault(); setMenuOpen(menuOpen === notebook.id ? null : notebook.id); }}
-            onDragEnter={e => {
-              e.preventDefault();
-            }}
+            onDragEnter={e => { e.preventDefault(); }}
             onDragOver={e => {
               e.preventDefault();
-              const types = Array.from(e.dataTransfer.types);
-              // Note drag: detected via custom type or via ref absence + plain text
-              const isNoteDrag = types.includes('text/note-id') ||
-                (draggingNbRef.current === null && types.includes('text/plain'));
+              const isNoteDrag = e.dataTransfer.types.includes('text/note-id') ||
+                (draggingNbRef.current === null && e.dataTransfer.types.includes('text/plain'));
               if (isNoteDrag) {
                 e.dataTransfer.dropEffect = 'move';
                 setDragOver(true);
@@ -193,8 +194,17 @@ function NotebookNode({
               const draggingId = draggingNbRef.current;
               if (!draggingId || draggingId === notebook.id) return;
               const draggingNb = allNotebooks.find(nb => nb.id === draggingId);
-              if (!!draggingNb?.parentId !== !!notebook.parentId) return;
+
+              if (isDescendant(notebook.id, draggingId, allNotebooks)) return;
+              if (!draggingNb?.parentId && notebook.parentId) return;
+
               e.dataTransfer.dropEffect = 'move';
+
+              if (draggingNb?.parentId && !notebook.parentId) {
+                setDragOver(true);
+                return;
+              }
+
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
               const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
               const newId = `${notebook.id}:${pos}`;
@@ -216,11 +226,10 @@ function NotebookNode({
               e.preventDefault();
               setDragOver(false);
 
-              // Resolve note ID — custom MIME type first, then text/plain fallback
               let noteId = e.dataTransfer.getData('text/note-id');
               if (!noteId) {
                 const plain = e.dataTransfer.getData('text/plain');
-                if (plain.startsWith('nt:')) noteId = plain.slice(3);
+                if (plain && plain.startsWith('nt:')) noteId = plain.slice(3);
               }
               if (noteId) {
                 dispatch({ type: 'UPDATE_NOTE', note: { id: noteId, notebookId: notebook.id } });
@@ -229,7 +238,6 @@ function NotebookNode({
                 return;
               }
 
-              // Resolve notebook ID — ref first, then getData fallback
               let nbId = draggingNbRef.current;
               if (!nbId) {
                 const fromData = e.dataTransfer.getData('text/notebook-id');
@@ -237,19 +245,31 @@ function NotebookNode({
                   nbId = fromData;
                 } else {
                   const plain = e.dataTransfer.getData('text/plain');
-                  if (plain.startsWith('nb:')) nbId = plain.slice(3);
+                  if (plain && plain.startsWith('nb:')) nbId = plain.slice(3);
                 }
               }
 
               if (nbId && nbId !== notebook.id) {
                 const draggingNb = allNotebooks.find(nb => nb.id === nbId);
-                if (!!draggingNb?.parentId === !!notebook.parentId) {
-                  const savedPos = dragOverRef.current?.id === notebook.id ? dragOverRef.current.pos : null;
-                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  const pos = savedPos ?? (e.clientY < rect.top + rect.height / 2 ? 'before' : 'after');
-                  const siblings = allNotebooks.filter(nb => nb.parentId === notebook.parentId);
-                  const afterSibling = siblings.find((_, i, arr) => arr[i - 1]?.id === notebook.id)?.id ?? null;
-                  onReorder(nbId, pos === 'before' ? notebook.id : afterSibling, notebook.parentId);
+                const isCycle = isDescendant(notebook.id, nbId, allNotebooks);
+                const isRootOnChild = !draggingNb?.parentId && !!notebook.parentId;
+
+                if (!isCycle && !isRootOnChild) {
+                  const isChildOnRoot = !!draggingNb?.parentId && !notebook.parentId;
+                  if (isChildOnRoot) {
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                    const rootChildren = childrenMap.get(notebook.id) ?? [];
+                    const beforeId = pos === 'before' ? (rootChildren[0]?.id ?? null) : null;
+                    onReorder(nbId, beforeId, notebook.id);
+                  } else {
+                    const savedPos = dragOverRef.current?.id === notebook.id ? dragOverRef.current.pos : null;
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const pos = savedPos ?? (e.clientY < rect.top + rect.height / 2 ? 'before' : 'after');
+                    const siblings = childrenMap.get(notebook.parentId) ?? [];
+                    const afterSibling = siblings.find((_, i, arr) => arr[i - 1]?.id === notebook.id)?.id ?? null;
+                    onReorder(nbId, pos === 'before' ? notebook.id : afterSibling, notebook.parentId);
+                  }
                 }
               }
               draggingNbRef.current = null;
@@ -340,6 +360,10 @@ function NotebookNode({
               key={child.id}
               notebook={child}
               allNotebooks={allNotebooks}
+              childrenMap={childrenMap}
+              notebookCountMap={notebookCountMap}
+              activeNotebookId={activeNotebookId}
+              dispatch={dispatch}
               depth={depth + 1}
               menuOpen={menuOpen}
               setMenuOpen={setMenuOpen}
@@ -368,7 +392,7 @@ function NotebookNode({
       )}
     </div>
   );
-}
+});
 
 export default function Sidebar() {
   const { state, dispatch } = useApp();
@@ -388,6 +412,54 @@ export default function Sidebar() {
   const [selectedNbIds, setSelectedNbIds] = useState<Set<string>>(new Set());
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
+  // Index notebooks by parentId — O(1) child lookup per node
+  const childrenMap = useMemo(() => {
+    const map = new Map<string | undefined, Notebook[]>();
+    for (const nb of state.notebooks) {
+      if (!map.has(nb.parentId)) map.set(nb.parentId, []);
+      map.get(nb.parentId)!.push(nb);
+    }
+    return map;
+  }, [state.notebooks]);
+
+  // Pre-compute subtree note counts for all notebooks in one pass
+  const notebookCountMap = useMemo(() => {
+    const direct = new Map<string, number>();
+    for (const note of state.notes) {
+      if (!note.isTrashed) direct.set(note.notebookId, (direct.get(note.notebookId) ?? 0) + 1);
+    }
+    const result = new Map<string, number>();
+    const visited = new Set<string>();
+    function sum(id: string): number {
+      if (result.has(id)) return result.get(id)!;
+      if (visited.has(id)) return 0;
+      visited.add(id);
+      const total = (direct.get(id) ?? 0) +
+        (childrenMap.get(id) ?? []).reduce((acc, c) => acc + sum(c.id), 0);
+      result.set(id, total);
+      return total;
+    }
+    for (const nb of state.notebooks) sum(nb.id);
+    return result;
+  }, [state.notebooks, state.notes, childrenMap]);
+
+  // Pre-compute tag note counts
+  const tagCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const note of state.notes) {
+      if (!note.isTrashed) {
+        for (const tagId of note.tags) map.set(tagId, (map.get(tagId) ?? 0) + 1);
+      }
+    }
+    return map;
+  }, [state.notes]);
+
+  const { allCount, pinnedCount, trashCount } = useMemo(() => ({
+    allCount: state.notes.filter(n => !n.isTrashed).length,
+    pinnedCount: state.notes.filter(n => n.isPinned && !n.isTrashed).length,
+    trashCount: state.notes.filter(n => n.isTrashed).length,
+  }), [state.notes]);
+
   useEffect(() => {
     setExpandedIds(prev => {
       const next = new Set(prev);
@@ -400,71 +472,70 @@ export default function Sidebar() {
   useEffect(() => {
     if (!menuOpen) return;
     function onMouseDown(e: MouseEvent) {
-      if (!sidebarRef.current?.contains(e.target as Node)) {
-        setMenuOpen(null);
-      }
+      if (!sidebarRef.current?.contains(e.target as Node)) setMenuOpen(null);
     }
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [menuOpen]);
 
-  function getNextColor() {
-    return NOTE_COLORS[state.notebooks.length % NOTE_COLORS.length];
-  }
-
-  function createNotebook(parentId?: string) {
-    const id = generateId();
-    const color = parentId
-      ? (state.notebooks.find(nb => nb.id === parentId)?.color ?? getNextColor())
-      : getNextColor();
-    dispatch({ type: 'CREATE_NOTEBOOK', id, name: '새 노트북', color, parentId });
-    setEditingId(id);
-    setEditingName('새 노트북');
-  }
-
-  function getSubtreeIds(fromId: string): string[] {
+  const getSubtreeIds = useCallback((fromId: string): string[] => {
+    const visited = new Set<string>();
     const result: string[] = [];
     const collect = (id: string) => {
+      if (visited.has(id)) return;
+      visited.add(id);
       result.push(id);
-      state.notebooks.filter(nb => nb.parentId === id).forEach(c => collect(c.id));
+      (childrenMap.get(id) ?? []).forEach(c => collect(c.id));
     };
     collect(fromId);
     return result;
-  }
+  }, [childrenMap]);
 
-  function onToggle(id: string) {
+  const createNotebook = useCallback((parentId?: string) => {
+    const id = generateId();
+    const color = parentId
+      ? (state.notebooks.find(nb => nb.id === parentId)?.color ?? NOTE_COLORS[state.notebooks.length % NOTE_COLORS.length])
+      : NOTE_COLORS[state.notebooks.length % NOTE_COLORS.length];
+    dispatch({ type: 'CREATE_NOTEBOOK', id, name: '새 노트북', color, parentId });
+    setEditingId(id);
+    setEditingName('새 노트북');
+  }, [state.notebooks, dispatch]);
+
+  const onToggle = useCallback((id: string) => {
     setExpandedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
-  }
+  }, []);
 
-  function onExpand(id: string) {
+  const onExpand = useCallback((id: string) => {
     setExpandedIds(prev => prev.has(id) ? prev : new Set([...prev, id]));
-  }
+  }, []);
 
-  function onExpandAll(fromId: string) {
+  const onExpandAll = useCallback((fromId: string) => {
     setExpandedIds(prev => {
       const next = new Set(prev);
       getSubtreeIds(fromId).forEach(id => next.add(id));
       return next;
     });
-  }
+  }, [getSubtreeIds]);
 
-  function onCollapseAll(fromId: string) {
+  const onCollapseAll = useCallback((fromId: string) => {
     setExpandedIds(prev => {
       const next = new Set(prev);
       getSubtreeIds(fromId).forEach(id => next.delete(id));
       return next;
     });
-  }
+  }, [getSubtreeIds]);
 
-  const rootNotebooks = state.notebooks.filter(nb => !nb.parentId);
-  const allCount = state.notes.filter(n => !n.isTrashed).length;
-  const pinnedCount = state.notes.filter(n => n.isPinned && !n.isTrashed).length;
-  const trashCount = state.notes.filter(n => n.isTrashed).length;
+  const onReorder = useCallback((nbId: string, beforeId: string | null, parentId: string | undefined) => {
+    dispatch({ type: 'REORDER_NOTEBOOK', notebookId: nbId, beforeId, parentId });
+  }, [dispatch]);
+
+  const rootNotebooks = childrenMap.get(undefined) ?? [];
   const hasAnyNotebook = state.notebooks.length > 0;
+  const activeNotebookId = state.viewMode === 'notebook' ? state.selectedNotebookId : null;
 
   const isActive = (viewMode: string, id?: string) => {
     if (viewMode === 'notebook') return state.viewMode === 'notebook' && state.selectedNotebookId === id;
@@ -541,6 +612,10 @@ export default function Sidebar() {
                 key={nb.id}
                 notebook={nb}
                 allNotebooks={state.notebooks}
+                childrenMap={childrenMap}
+                notebookCountMap={notebookCountMap}
+                activeNotebookId={activeNotebookId}
+                dispatch={dispatch}
                 depth={0}
                 menuOpen={menuOpen}
                 setMenuOpen={setMenuOpen}
@@ -558,9 +633,7 @@ export default function Sidebar() {
                 dragOverRef={dragOverRef}
                 dropLineId={dropLineId}
                 setDropLineId={setDropLineId}
-                onReorder={(nbId, beforeId, parentId) =>
-                  dispatch({ type: 'REORDER_NOTEBOOK', notebookId: nbId, beforeId, parentId })
-                }
+                onReorder={onReorder}
                 selectedNbIds={selectedNbIds}
                 setSelectedNbIds={setSelectedNbIds}
                 draggingId={draggingId}
@@ -587,7 +660,7 @@ export default function Sidebar() {
         {tagsOpen && (
           <div className="section-items">
             {state.tags.map(tag => {
-              const count = state.notes.filter(n => n.tags.includes(tag.id) && !n.isTrashed).length;
+              const count = tagCountMap.get(tag.id) ?? 0;
               return (
                 <div key={tag.id} className="section-item-wrapper">
                   <button

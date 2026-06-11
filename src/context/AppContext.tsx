@@ -50,6 +50,18 @@ function getRandomColor(): string {
   return NOTE_COLORS[Math.floor(Math.random() * NOTE_COLORS.length)];
 }
 
+function isDescendantOf(notebookId: string, ancestorId: string, notebooks: Notebook[]): boolean {
+  const visited = new Set<string>();
+  let cur: string | undefined = notebookId;
+  while (cur) {
+    if (visited.has(cur)) break;
+    visited.add(cur);
+    if (cur === ancestorId) return true;
+    cur = notebooks.find(nb => nb.id === cur)?.parentId;
+  }
+  return false;
+}
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'LOAD_DATA':
@@ -64,9 +76,11 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_VIEW': {
       let selectedNoteId: string | null = null;
       if (action.viewMode === 'notebook' && action.notebookId) {
-        const collectIds = (id: string): string[] => {
+        const collectIds = (id: string, visited = new Set<string>()): string[] => {
+          if (visited.has(id)) return [];
+          visited.add(id);
           const children = state.notebooks.filter(nb => nb.parentId === id).map(nb => nb.id);
-          return [id, ...children.flatMap(collectIds)];
+          return [id, ...children.flatMap(c => collectIds(c, visited))];
         };
         const nbIds = new Set(collectIds(action.notebookId));
         const latest = [...state.notes]
@@ -204,6 +218,7 @@ function reducer(state: AppState, action: Action): AppState {
       // Collect IDs of the deleted notebook and all its descendants
       const toDelete = new Set<string>();
       const collect = (id: string) => {
+        if (toDelete.has(id)) return;
         toDelete.add(id);
         state.notebooks.filter(nb => nb.parentId === id).forEach(c => collect(c.id));
       };
@@ -231,6 +246,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, notebooks, notes };
     }
     case 'MOVE_NOTEBOOK': {
+      if (action.parentId && isDescendantOf(action.parentId, action.notebookId, state.notebooks)) return state;
       const notebooks = state.notebooks.map(nb =>
         nb.id === action.notebookId ? { ...nb, parentId: action.parentId } : nb
       );
@@ -240,8 +256,8 @@ function reducer(state: AppState, action: Action): AppState {
     case 'REORDER_NOTEBOOK': {
       const moving = state.notebooks.find(nb => nb.id === action.notebookId);
       if (!moving) return state;
-      // Inserting before itself is a no-op (happens when item is already right before the target)
       if (action.beforeId === action.notebookId) return state;
+      if (action.parentId && isDescendantOf(action.parentId, action.notebookId, state.notebooks)) return state;
       const rest = state.notebooks.filter(nb => nb.id !== action.notebookId);
       let idx = action.beforeId ? rest.findIndex(nb => nb.id === action.beforeId) : -1;
       if (idx === -1) idx = rest.length;
