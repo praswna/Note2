@@ -102,6 +102,8 @@ export function loadVersions(): NoteVersion[] {
 }
 
 export function saveNotes(notes: Note[]): void {
+  // Tauri persistence is handled via individual note files + index; localStorage is unused
+  if (isTauriApp()) return;
   localStorage.setItem(KEYS.notes, JSON.stringify(notes));
 }
 

@@ -1,4 +1,5 @@
-import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
+import { useMemo, useState, useCallback, useRef, useEffect, memo } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Search, Plus, Pin, Tag, Trash2, RotateCcw, X, FolderOpen } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Note, AppState } from '../types';
@@ -17,8 +18,12 @@ function formatDate(ts: number): string {
   return new Date(ts).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' });
 }
 
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function getPreview(content: string): string {
-  return content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 100).trim();
+  return stripHtml(content).slice(0, 100);
 }
 
 interface NoteCardProps {
@@ -29,7 +34,7 @@ interface NoteCardProps {
   onCardClick: (note: Note, e: React.MouseEvent) => void;
 }
 
-function NoteCard({ note, state, dispatch, isMultiSelected, onCardClick }: NoteCardProps) {
+const NoteCard = memo(function NoteCard({ note, state, dispatch, isMultiSelected, onCardClick }: NoteCardProps) {
   const notebook = state.notebooks.find(nb => nb.id === note.notebookId);
   const noteTags = state.tags.filter(t => note.tags.includes(t.id));
   const preview = getPreview(note.content);
@@ -90,19 +95,41 @@ function NoteCard({ note, state, dispatch, isMultiSelected, onCardClick }: NoteC
       )}
     </div>
   );
-}
+});
 
 export default function NoteList() {
   const { state, dispatch } = useApp();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [moveOpen, setMoveOpen] = useState(false);
   const lastClickedRef = useRef<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Local query for instant input feedback; debounced dispatch avoids
+  // triggering filteredNotes recomputation on every keystroke
+  const [localQuery, setLocalQuery] = useState(state.searchQuery);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      dispatch({ type: 'SET_SEARCH', query: localQuery });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [localQuery, dispatch]);
 
   useEffect(() => {
     setSelectedIds(new Set());
     setMoveOpen(false);
     lastClickedRef.current = null;
-  }, [state.viewMode, state.selectedNotebookId, state.selectedTagId]);
+    setLocalQuery('');
+    dispatch({ type: 'SET_SEARCH', query: '' });
+  }, [state.viewMode, state.selectedNotebookId, state.selectedTagId, dispatch]);
+
+  // Pre-strip HTML from content once per note change, not per search keystroke
+  const strippedContentMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const note of state.notes) {
+      if (note.content) map.set(note.id, stripHtml(note.content).toLowerCase());
+    }
+    return map;
+  }, [state.notes]);
 
   const filteredNotes = useMemo(() => {
     let notes = state.notes;
@@ -112,9 +139,11 @@ export default function NoteList() {
     } else {
       notes = notes.filter(n => !n.isTrashed);
       if (state.viewMode === 'notebook' && state.selectedNotebookId) {
-        const collectIds = (id: string): string[] => {
+        const collectIds = (id: string, visited = new Set<string>()): string[] => {
+          if (visited.has(id)) return [];
+          visited.add(id);
           const children = state.notebooks.filter(nb => nb.parentId === id).map(nb => nb.id);
-          return [id, ...children.flatMap(collectIds)];
+          return [id, ...children.flatMap(c => collectIds(c, visited))];
         };
         const notebookIds = new Set(collectIds(state.selectedNotebookId));
         notes = notes.filter(n => notebookIds.has(n.notebookId));
@@ -129,7 +158,7 @@ export default function NoteList() {
       const q = state.searchQuery.toLowerCase();
       notes = notes.filter(n =>
         n.title.toLowerCase().includes(q) ||
-        n.content.toLowerCase().includes(q)
+        (strippedContentMap.get(n.id) ?? '').includes(q)
       );
     }
 
@@ -138,11 +167,17 @@ export default function NoteList() {
       if (!a.isPinned && b.isPinned) return 1;
       return b.updatedAt - a.updatedAt;
     });
-  }, [state.notes, state.notebooks, state.viewMode, state.selectedNotebookId, state.selectedTagId, state.searchQuery]);
+  }, [state.notes, state.notebooks, state.viewMode, state.selectedNotebookId, state.selectedTagId, state.searchQuery, strippedContentMap]);
+
+  const virtualizer = useVirtualizer({
+    count: filteredNotes.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 112,
+    overscan: 5,
+  });
 
   const handleCardClick = useCallback((note: Note, e: React.MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
-      // Ctrl+클릭: 토글
       setSelectedIds(prev => {
         const next = new Set(prev);
         if (next.has(note.id)) next.delete(note.id);
@@ -150,36 +185,22 @@ export default function NoteList() {
         return next;
       });
     } else if (e.shiftKey && lastClickedRef.current) {
-      // Shift+클릭: 범위 선택
       const ids = filteredNotes.map(n => n.id);
       const a = ids.indexOf(lastClickedRef.current);
       const b = ids.indexOf(note.id);
       const range = ids.slice(Math.min(a, b), Math.max(a, b) + 1);
       setSelectedIds(prev => new Set([...prev, ...range]));
     } else {
-      // 일반 클릭: 단일 선택, 다중선택 해제
       setSelectedIds(new Set());
       dispatch({ type: 'SELECT_NOTE', noteId: note.id });
       lastClickedRef.current = note.id;
     }
-  }, [filteredNotes, dispatch, lastClickedRef]);
+  }, [filteredNotes, dispatch]);
 
   const clearSelection = () => { setSelectedIds(new Set()); setMoveOpen(false); };
-
-  const bulkTrash = () => {
-    selectedIds.forEach(id => dispatch({ type: 'TRASH_NOTE', noteId: id }));
-    clearSelection();
-  };
-
-  const bulkRestore = () => {
-    selectedIds.forEach(id => dispatch({ type: 'RESTORE_NOTE', noteId: id }));
-    clearSelection();
-  };
-
-  const bulkMove = (notebookId: string) => {
-    selectedIds.forEach(id => dispatch({ type: 'UPDATE_NOTE', note: { id, notebookId } }));
-    clearSelection();
-  };
+  const bulkTrash = () => { selectedIds.forEach(id => dispatch({ type: 'TRASH_NOTE', noteId: id })); clearSelection(); };
+  const bulkRestore = () => { selectedIds.forEach(id => dispatch({ type: 'RESTORE_NOTE', noteId: id })); clearSelection(); };
+  const bulkMove = (notebookId: string) => { selectedIds.forEach(id => dispatch({ type: 'UPDATE_NOTE', note: { id, notebookId } })); clearSelection(); };
 
   const viewTitle = useMemo(() => {
     if (state.viewMode === 'all') return '모든 노트';
@@ -237,11 +258,11 @@ export default function NoteList() {
               <input
                 type="text"
                 placeholder="노트 검색..."
-                value={state.searchQuery}
-                onChange={e => dispatch({ type: 'SET_SEARCH', query: e.target.value })}
+                value={localQuery}
+                onChange={e => setLocalQuery(e.target.value)}
               />
-              {state.searchQuery && (
-                <button onClick={() => dispatch({ type: 'SET_SEARCH', query: '' })}>
+              {localQuery && (
+                <button onClick={() => { setLocalQuery(''); dispatch({ type: 'SET_SEARCH', query: '' }); }}>
                   <X size={14} />
                 </button>
               )}
@@ -258,7 +279,7 @@ export default function NoteList() {
         )}
       </div>
 
-      <div className="note-list-body">
+      <div className="note-list-body" ref={listRef}>
         {filteredNotes.length === 0 ? (
           <div className="empty-state">
             {state.viewMode === 'trash' ? (
@@ -280,16 +301,30 @@ export default function NoteList() {
             )}
           </div>
         ) : (
-          filteredNotes.map(note => (
-            <NoteCard
-              key={note.id}
-              note={note}
-              state={state}
-              dispatch={dispatch}
-              isMultiSelected={selectedIds.has(note.id)}
-              onCardClick={handleCardClick}
-            />
-          ))
+          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
+            {virtualizer.getVirtualItems().map(vItem => (
+              <div
+                key={vItem.key}
+                data-index={vItem.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  transform: `translateY(${vItem.start}px)`,
+                }}
+              >
+                <NoteCard
+                  note={filteredNotes[vItem.index]}
+                  state={state}
+                  dispatch={dispatch}
+                  isMultiSelected={selectedIds.has(filteredNotes[vItem.index].id)}
+                  onCardClick={handleCardClick}
+                />
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
