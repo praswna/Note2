@@ -54,6 +54,18 @@ function AddForm({ onConfirm, onCancel, placeholder = '태그 이름...' }: AddF
   );
 }
 
+function isDescendant(nodeId: string, ancestorId: string, notebooks: Notebook[]): boolean {
+  const visited = new Set<string>();
+  let cur: string | undefined = nodeId;
+  while (cur) {
+    if (visited.has(cur)) break;
+    visited.add(cur);
+    if (cur === ancestorId) return true;
+    cur = notebooks.find(nb => nb.id === cur)?.parentId;
+  }
+  return false;
+}
+
 interface NotebookNodeProps {
   notebook: Notebook;
   allNotebooks: Notebook[];
@@ -98,9 +110,11 @@ function NotebookNode({
   const children = allNotebooks.filter(nb => nb.parentId === notebook.id);
   const hasChildren = children.length > 0;
 
-  const collectIds = (id: string): string[] => {
+  const collectIds = (id: string, visited = new Set<string>()): string[] => {
+    if (visited.has(id)) return [];
+    visited.add(id);
     const kids = allNotebooks.filter(nb => nb.parentId === id).map(nb => nb.id);
-    return [id, ...kids.flatMap(collectIds)];
+    return [id, ...kids.flatMap(k => collectIds(k, visited))];
   };
   const allIds = collectIds(notebook.id);
   const count = state.notes.filter(n => allIds.includes(n.notebookId) && !n.isTrashed).length;
@@ -153,7 +167,7 @@ function NotebookNode({
               e.dataTransfer.effectAllowed = 'move';
               e.dataTransfer.setData('text/notebook-id', notebook.id);
               e.dataTransfer.setData('text/plain', `nb:${notebook.id}`);
-              setTimeout(() => setDraggingId(notebook.id), 0);
+              setTimeout(() => { if (draggingNbRef.current === notebook.id) setDraggingId(notebook.id); }, 0);
             }}
             onDragEnd={() => {
               draggingNbRef.current = null;
@@ -181,10 +195,8 @@ function NotebookNode({
             }}
             onDragOver={e => {
               e.preventDefault();
-              const types = Array.from(e.dataTransfer.types);
-              // Note drag: detected via custom type or via ref absence + plain text
-              const isNoteDrag = types.includes('text/note-id') ||
-                (draggingNbRef.current === null && types.includes('text/plain'));
+              const isNoteDrag = e.dataTransfer.types.includes('text/note-id') ||
+                (draggingNbRef.current === null && e.dataTransfer.types.includes('text/plain'));
               if (isNoteDrag) {
                 e.dataTransfer.dropEffect = 'move';
                 setDragOver(true);
@@ -194,12 +206,7 @@ function NotebookNode({
               if (!draggingId || draggingId === notebook.id) return;
               const draggingNb = allNotebooks.find(nb => nb.id === draggingId);
 
-              // Prevent cycle: block if drop target is inside the dragged node's subtree
-              let anc: string | undefined = notebook.parentId;
-              while (anc) {
-                if (anc === draggingId) return;
-                anc = allNotebooks.find(nb => nb.id === anc)?.parentId;
-              }
+              if (isDescendant(notebook.id, draggingId, allNotebooks)) return;
 
               // Block root→non-root (making a root a child of another node's parent group)
               if (!draggingNb?.parentId && notebook.parentId) return;
@@ -238,7 +245,7 @@ function NotebookNode({
               let noteId = e.dataTransfer.getData('text/note-id');
               if (!noteId) {
                 const plain = e.dataTransfer.getData('text/plain');
-                if (plain.startsWith('nt:')) noteId = plain.slice(3);
+                if (plain && plain.startsWith('nt:')) noteId = plain.slice(3);
               }
               if (noteId) {
                 dispatch({ type: 'UPDATE_NOTE', note: { id: noteId, notebookId: notebook.id } });
@@ -255,20 +262,14 @@ function NotebookNode({
                   nbId = fromData;
                 } else {
                   const plain = e.dataTransfer.getData('text/plain');
-                  if (plain.startsWith('nb:')) nbId = plain.slice(3);
+                  if (plain && plain.startsWith('nb:')) nbId = plain.slice(3);
                 }
               }
 
               if (nbId && nbId !== notebook.id) {
                 const draggingNb = allNotebooks.find(nb => nb.id === nbId);
 
-                // Cycle guard: abort if drop target is inside the dragged node's subtree
-                let anc: string | undefined = notebook.parentId;
-                let isCycle = false;
-                while (anc) {
-                  if (anc === nbId) { isCycle = true; break; }
-                  anc = allNotebooks.find(nb => nb.id === anc)?.parentId;
-                }
+                const isCycle = isDescendant(notebook.id, nbId, allNotebooks);
 
                 const isRootOnChild = !draggingNb?.parentId && !!notebook.parentId;
 
@@ -462,8 +463,11 @@ export default function Sidebar() {
   }
 
   function getSubtreeIds(fromId: string): string[] {
+    const visited = new Set<string>();
     const result: string[] = [];
     const collect = (id: string) => {
+      if (visited.has(id)) return;
+      visited.add(id);
       result.push(id);
       state.notebooks.filter(nb => nb.parentId === id).forEach(c => collect(c.id));
     };
